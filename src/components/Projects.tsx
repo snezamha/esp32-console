@@ -21,13 +21,39 @@ export function Projects({ active }: { active: boolean }) {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!active || !user) return;
-    const source = new EventSource("/api/devices/stream");
-    source.addEventListener("devices", (event) => {
-      setDevices(JSON.parse((event as MessageEvent).data));
-      setError(null);
-    });
-    source.onerror = () => setError("Connection interrupted. Reconnecting…");
-    return () => source.close();
+    let source: EventSource | null = null;
+    let staleTimer: ReturnType<typeof setTimeout> | undefined;
+    const armWatchdog = () => {
+      clearTimeout(staleTimer);
+      // Healthy requests close after at most 8 seconds, then EventSource reconnects.
+      // Show a warning only after a sustained absence of successful device updates.
+      staleTimer = setTimeout(() => setError("Connection interrupted. Reconnecting…"), 20_000);
+    };
+    const open = () => {
+      source?.close();
+      source = new EventSource("/api/devices/stream");
+      armWatchdog();
+      source.addEventListener("devices", (event) => {
+        setDevices(JSON.parse((event as MessageEvent).data));
+        setError(null);
+        armWatchdog();
+      });
+      // EventSource automatically reconnects after both normal closes and network errors.
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") open();
+      else {
+        source?.close();
+        clearTimeout(staleTimer);
+      }
+    };
+    onVisibility();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      source?.close();
+      clearTimeout(staleTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [active, user]);
   if (status === "loading") return <p className="py-8 text-center text-sm text-zinc-500">Loading…</p>;
   if (!user) return <AuthCard />;
