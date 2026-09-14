@@ -12,6 +12,7 @@
 #include "../board/board.h"
 #include "../common/settings.h"
 #include "network.h"
+#include "../runtime/project_runtime.h"
 
 // Default console address; `pnpm firmware:build` writes console_url.h from the CONSOLE_URL
 // environment variable.
@@ -216,6 +217,8 @@ std::string ConsoleClient::ServerHost() const {
 // Requests
 
 void ConsoleClient::Loop(uint32_t now_ms) {
+  const auto project_ack = ProjectRuntime::Get().Loop();
+  if (!project_ack.empty()) { acks_.push_back(project_ack); Changed(); }
   if (poll_.done) {
     poll_.done = false;
     const bool ok = poll_.code == 200;
@@ -361,7 +364,7 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
   bool has_rev = false;
   Values settings;
   std::vector<Command> commands;
-  std::string weather;
+  std::string project_data;
 
   size_t start = 0;
   while (start < body.size()) {
@@ -384,8 +387,8 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
     } else if (key == "rev") {
       rev = atoi(value.c_str());
       has_rev = true;
-    } else if (key == "weather") {
-      weather = value;
+    } else if (key == "project_data") {
+      project_data = UrlDecode(value);
     } else if (key.rfind("set.", 0) == 0) {
       settings.push_back({key.substr(4), value});
     } else if (key.rfind("cmd.", 0) == 0) {
@@ -441,7 +444,7 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
       Save();
     }
     for (const auto& command : commands) HandleCommand(command);
-    if (!weather.empty() && command_handler_) command_handler_({"", "weather_data", weather});
+    if (!project_data.empty()) ProjectRuntime::Get().SetData(project_data);
     const bool name_changed = name != name_;
     name_ = name;
     SetState(State::Linked);
@@ -471,6 +474,11 @@ void ConsoleClient::HandleCommand(const Command& command) {
   if (seen_commands_.size() > kSeenCommands) seen_commands_.erase(seen_commands_.begin());
 
   Serial.printf("{\"console\":\"command\",\"type\":\"%s\"}\n", command.type.c_str());
+  if (command.type == "project_install") {
+    const auto result = ota_active_ ? "fail|Firmware update is running" : ProjectRuntime::Get().Start(command.id, command.arg, server_, insecure_);
+    if (!result.empty()) acks_.push_back(command.id + "|" + result);
+    Changed(); return;
+  }
   if (command.type == "ota") {
     StartOta(command);
     return;
@@ -483,7 +491,7 @@ void ConsoleClient::HandleCommand(const Command& command) {
 // Over-the-air update
 
 void ConsoleClient::StartOta(const Command& command) {
-  if (ota_active_) {
+  if (ota_active_ || ProjectRuntime::Get().Busy()) {
     acks_.push_back(command.id + "|fail|Another update is running");
     return;
   }

@@ -1,9 +1,11 @@
+import { DISPLAY_PROJECTS } from "@/lib/projects";
+
 /**
  * Board settings that the console can change. Keys match the `set.<key>=<value>` lines
  * the firmware understands (firmware/<board>/src/services/console_client.cpp).
  */
 export type DeviceSettings = {
-  project: "none" | "weather" | "analog-clock";
+  project: string;
   weather_lat: number;
   weather_lon: number;
   volume: number;
@@ -92,7 +94,7 @@ export function sanitizeSettings(input: Record<string, unknown>, base: DeviceSet
     if (input[key] !== undefined && options.includes(value)) out[key] = value;
   };
 
-  if (["none", "weather", "analog-clock"].includes(String(input.project))) out.project = input.project as DeviceSettings["project"];
+  if (input.project === "none" || DISPLAY_PROJECTS.some((project) => project.id === input.project)) out.project = String(input.project);
   num("weather_lat", -900000, 900000);
   num("weather_lon", -1800000, 1800000);
   num("volume", 0, 100);

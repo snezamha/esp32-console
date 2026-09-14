@@ -1,6 +1,8 @@
 import { getUser, unauthorized } from "@/lib/auth";
 import { BOARDS } from "@/lib/boards";
-import { listDevices, queueCommand } from "@/lib/device-store";
+import { listDevices, queueCommand, updateDevice } from "@/lib/device-store";
+import { projectPackage } from "@/lib/projects";
+import { isOtaActive } from "@/lib/device-client";
 import type { CommandType } from "@/lib/device-types";
 
 const TEST_KEYS = ["all", "battery", "memory", "buttons", "led", "sd", "codec", "mic", "speaker", "wifi", "ble"];
@@ -23,6 +25,19 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
   let otaVersion = "";
 
   switch (type) {
+    case "project_install": {
+      if (!device.projectSupported) return bad("Update the base firmware to v1.0.4 or later.");
+      if (isOtaActive(device.ota) || device.commands.some((c) => c.type === "project_install" && c.status === "sent")) return bad("An installation is already running.");
+      if (body.project === "none") { arg = new URLSearchParams({ id: "none" }).toString(); break; }
+      const project = projectPackage(body.project, device.board);
+      if (!project) return bad("Project package is not available for this board.");
+      if (project.id === "weather") {
+        if (!Number.isInteger(body.latitude) || !Number.isInteger(body.longitude) || Math.abs(body.latitude) > 900000 || Math.abs(body.longitude) > 1800000) return bad("Enter valid latitude and longitude.");
+        await updateDevice(user.id, id, { settings: { ...device.settings, weather_lat: body.latitude, weather_lon: body.longitude } });
+      }
+      arg = new URLSearchParams({ id: project.id, path: project.path, abi: String(project.abi), size: String(project.size), md5: project.md5 }).toString();
+      break;
+    }
     case "restart":
     case "poweroff":
     case "identify":
@@ -64,7 +79,12 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
       return bad("Unknown command.");
   }
 
-  const updated = await queueCommand(user.id, id, type, arg, otaVersion);
+  let updated;
+  try { updated = await queueCommand(user.id, id, type, arg, otaVersion); }
+  catch (error) {
+    if (error instanceof Error && error.message === "An installation is already running.") return Response.json({ error: error.message }, { status: 409 });
+    throw error;
+  }
   if (!updated) return Response.json({ error: "Device not found." }, { status: 404 });
   return Response.json({ device: updated }, { status: 202 });
 }

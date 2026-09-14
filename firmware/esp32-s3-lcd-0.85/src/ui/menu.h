@@ -96,6 +96,4 @@ class MenuView {
   int content_width_ = 128;
   int content_height_ = 112;
   uint32_t last_animate_ = 0;
-  uint32_t selected_at_ = 0;  // For scrolling long labels
-  bool marquee_active_ = false;
 };

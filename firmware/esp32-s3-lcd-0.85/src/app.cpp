@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <ctime>
-#include <cmath>
 #include <sstream>
 #include <vector>
 
@@ -14,6 +13,7 @@
 #include "common/settings.h"
 #include "hw_test.h"
 #include "services/console_client.h"
+#include "runtime/project_runtime.h"
 #include "lang.h"
 #include "services/device_config.h"
 #include "services/led_feedback.h"
@@ -152,6 +152,7 @@ void App::Start() {
   Serial.setTxTimeoutMs(0);
 
   DeviceConfig::Get().Load();
+  ProjectRuntime::Get().Begin();
 
   auto& board = Board::GetInstance();
   board.Initialize();
@@ -312,11 +313,7 @@ void App::Loop() {
     if (!busy && now - last_input_ >= kMenuAutoCloseMs) menu_.Close();
   }
 
-  if (project_loading_until_) {
-    board.GetDisplay()->Invalidate();
-    if (static_cast<int32_t>(now - project_loading_until_) >= 0) project_loading_until_ = 0;
-  }
-  if (!menu_.IsOpen() && DeviceConfig::Get().project != "none" && now - last_live_redraw_ >= 1000) {
+  if (!menu_.IsOpen() && (ProjectRuntime::Get().Busy() || ProjectRuntime::Get().Id() != "none") && now - last_live_redraw_ >= 33) {
     last_live_redraw_ = now;
     board.GetDisplay()->Invalidate();
   }
@@ -386,7 +383,7 @@ void App::DrawOverlay(Canvas& c, int w, int h, const Theme& theme) {
   }
   const std::string percent = std::to_string(static_cast<int>(hold_progress_ * 100)) + "%";
   c.TextCentered(cx, cy - 9, percent.c_str(), theme.text);
-  c.TextCentered(cx, cy + 26, hold_label_.c_str(), theme.text);
+  c.TextMarquee(cx - 38, cy + 26, 76, hold_label_.c_str(), theme.text, 1, true);
 }
 
 void App::OnClockTick() {
@@ -413,54 +410,10 @@ std::string App::HomeSignature() const {
 void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   auto& network = Network::GetInstance();
   const int cx = x + w / 2;
-  const auto& config = DeviceConfig::Get();
-  if (project_loading_until_) {
-    c.TextCentered(cx, y + h / 2 - 12, "Loading project", theme.info);
-    const int progress = 1200 - std::min<uint32_t>(1200, project_loading_until_ - millis());
-    c.FillRoundRect(x + 20, y + h / 2 + 6, w - 40, 4, 2, theme.selected);
-    c.FillRoundRect(x + 20, y + h / 2 + 6, std::max(2, (w - 40) * progress / 1200), 4, 2, theme.info);
-    return;
-  }
-  // Pairing keeps priority so the board remains linkable after removal.
+  // Keep setup and pairing visible; installed modules draw only inside the content area.
   const bool pairing = network.State() == Network::WifiState::Setup ||
       ConsoleClient::GetInstance().GetState() == ConsoleClient::State::Pairing;
-  if (!pairing && config.project == "analog-clock") {
-    if (!network.TimeValid()) {
-      c.TextCentered(cx, y + h / 2, "Syncing time...", theme.muted);
-      return;
-    }
-    const time_t now = time(nullptr);
-    const tm local = *localtime(&now);
-    const int cy = y + h / 2, r = std::min(w, h) / 2 - 7;
-    c.Ring(cx, cy, r, 1, theme.muted);
-    const double pi = 3.141592653589793;
-    for (int i = 0; i < 12; ++i) {
-      const double a = i * pi / 6 - pi / 2;
-      c.Line(cx + cos(a) * (r - 4), cy + sin(a) * (r - 4), cx + cos(a) * (r - 1), cy + sin(a) * (r - 1), 1, theme.text);
-    }
-    auto hand = [&](double units, double length, int thickness, uint16_t color) {
-      const double a = units * pi / 30 - pi / 2;
-      c.Line(cx, cy, cx + cos(a) * length, cy + sin(a) * length, thickness, color);
-    };
-    hand((local.tm_hour % 12) * 5 + local.tm_min / 12.0, r * .5, 3, theme.text);
-    hand(local.tm_min + local.tm_sec / 60.0, r * .75, 2, theme.text);
-    hand(local.tm_sec, r * .82, 1, theme.info);
-    c.FillCircle(cx, cy, 3, theme.info);
-    return;
-  }
-  if (!pairing && config.project == "weather") {
-    const bool stale = weather_updated_at_ && millis() - weather_updated_at_ > 1200000;
-    const auto split = weather_data_.find('|');
-    c.TextCentered(cx, y + 16, "Weather", theme.muted);
-    if (split == std::string::npos) {
-      c.TextCentered(cx, y + h / 2, weather_data_.empty() ? "Loading weather" : "Unavailable", theme.info);
-    } else {
-      c.TextCentered(cx, y + h / 2 - 10, weather_data_.substr(0, split).c_str(), theme.text, 2);
-      c.TextCentered(cx, y + h / 2 + 16, weather_data_.substr(split + 1).c_str(), theme.info);
-      if (stale) c.TextCentered(cx, y + h - 12, "Last known", theme.muted);
-    }
-    return;
-  }
+  if (!pairing && ProjectRuntime::Get().Draw(c, x, y, w, h, theme)) return;
   const int line = Canvas::LineHeight() + 2;
   std::vector<std::pair<std::string, uint16_t>> lines;
 
@@ -497,7 +450,7 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
         ty += big + 4;
         c.TextCentered(cx, ty, "code on", theme.muted);
         ty += line;
-        c.TextCentered(cx, ty, console.ServerHost().substr(0, (w - 4) / 6).c_str(), theme.text);
+        c.TextCentered(cx, ty, console.ServerHost().c_str(), theme.text);
         return;
       }
       lines = {{network.WifiSsid(), theme.muted}, {network.WifiIp(), theme.info}};
@@ -511,8 +464,7 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   int ty = y + (h - static_cast<int>(lines.size()) * line) / 2;
   for (const auto& [text, color] : lines) {
     if (!text.empty()) {
-      const std::string shown = text.substr(0, (w - 4) / 6);
-      c.TextCentered(cx, ty, shown.c_str(), color);
+      c.TextMarquee(x + 2, ty, w - 4, text.c_str(), color, 1, true);
     }
     ty += line;
   }
@@ -693,11 +645,7 @@ MenuItems App::BuildConnectivityMenu() {
     const std::string ip = network.State() == Network::WifiState::Connected
                                ? network.WifiIp()
                                : (network.AccessPointActive() ? network.AccessPointIp() : "-");
-    if (ip.size() <= 9) return ip;
-    // Last two octets when the full address does not fit.
-    const size_t last = ip.rfind('.');
-    const size_t cut = ip.rfind('.', last - 1);
-    return ".." + ip.substr(cut);
+    return ip;
   }));
 
   MenuItem scan = Submenu("Scan", [this]() { return BuildNetworksMenu(); });
@@ -1217,7 +1165,7 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
-  body += "&s.project=" + (project_loading_until_ ? previous_project_ : config.project) + "&s.weather_lat=" + std::to_string(config.weather_lat) + "&s.weather_lon=" + std::to_string(config.weather_lon);
+  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=1";
   for (size_t pos = 0; (pos = body.find('/', pos)) != std::string::npos;) body.replace(pos, 1, "%2F");
 
   const auto networks = Network::GetInstance().SavedNetworks();
@@ -1246,22 +1194,7 @@ void App::ApplyRemoteSettings(const ConsoleClient::Values& values) {
   for (const auto& [key, value] : values) {
     const int n = atoi(value.c_str());
     const bool on = value == "1";
-    if (key == "project") {
-      if ((value == "none" || value == "weather" || value == "analog-clock") && value != config.project) {
-        previous_project_ = config.project;
-        config.project = value;
-        project_loading_until_ = millis() + 1200;
-        weather_data_.clear();
-        weather_updated_at_ = 0;
-        menu_.Close();
-      }
-    } else if (key == "weather_lat") {
-      config.weather_lat = std::clamp(n, -900000, 900000);
-      weather_data_.clear();
-    } else if (key == "weather_lon") {
-      config.weather_lon = std::clamp(n, -1800000, 1800000);
-      weather_data_.clear();
-    } else if (key == "volume") {
+    if (key == "volume") {
       board.GetAudioCodec()->SetOutputVolume(std::clamp(n, 0, 100));
     } else if (key == "brightness") {
       Settings settings("display");
@@ -1312,12 +1245,7 @@ std::string App::HandleConsoleCommand(const ConsoleClient::Command& command) {
   auto& board = Board::GetInstance();
   auto& network = Network::GetInstance();
 
-  if (command.type == "weather_data") {
-    weather_data_ = command.arg;
-    weather_updated_at_ = millis();
-    board.GetDisplay()->Invalidate();
-    return "";
-  } else if (command.type == "restart") {
+  if (command.type == "restart") {
     Serial.flush();
     delay(150);
     ESP.restart();

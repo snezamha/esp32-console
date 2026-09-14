@@ -10,7 +10,7 @@ import type { DeviceSettings } from "@/lib/device-settings";
  *   wifi_add            arg: `ssid=<ssid>&password=<password>` (saved as the backup network)
  *   wifi_forget         forget the backup network
  */
-export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test" | "ota" | "wifi_add" | "wifi_forget";
+export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test" | "ota" | "wifi_add" | "wifi_forget" | "project_install";
 
 export type DeviceCommand = {
   id: string;

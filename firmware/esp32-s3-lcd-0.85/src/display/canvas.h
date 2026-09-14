@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <map>
+#include <tuple>
 #include <vector>
 
 // RGB565 color from 0xRRGGBB.
@@ -52,11 +54,26 @@ class Canvas {
   int Text(int x, int y, const char* text, uint16_t color, int scale = 1);
   static int TextWidth(const char* text, int scale = 1);
   static int LineHeight(int scale = 1) { return 9 * scale; }
+  // Animated text stays inside its own viewport and scrolls right to left only on overflow.
+  void BeginFrame(uint32_t now_ms);
+  void EndFrame();
+  bool HasMarquee() const { return marquee_active_; }
+  void TextMarquee(int x, int y, int width, const char* text, uint16_t color,
+                   int scale = 1, bool centered = false);
   void TextCentered(int cx, int y, const char* text, uint16_t color, int scale = 1);
   // Word-wraps to `max_width`; returns the lines.
   static std::vector<std::string> Wrap(const std::string& text, int max_width, int scale = 1);
 
  private:
+  struct MarqueeState {
+    std::string text;
+    uint32_t started_at = 0;
+    uint32_t frame = 0;
+  };
+  std::map<std::tuple<int, int, int, int>, MarqueeState> marquees_;
+  uint32_t frame_ = 0;
+  uint32_t frame_time_ = 0;
+  bool marquee_active_ = false;
   int width_;
   int height_;
   uint8_t* buf_;

@@ -11,18 +11,23 @@
           "name": "nvs",
           "offset": 36864,
           "size": 20480
+        },
+        {
+          "name": "projects",
+          "offset": 6750208,
+          "size": 1572864
         }
       ],
       "versions": [
         {
-          "version": "1.0.2",
-          "builtAt": "2026-09-14T21:35:52.163Z",
-          "size": 1949696,
-          "sha256": "cc180168582abc6eb29ca4181bba6dfc5868065bc11bbdcd8ae0c3263a8b7a12",
+          "version": "1.0.4",
+          "builtAt": "2026-09-14T22:14:47.404Z",
+          "size": 1990656,
+          "sha256": "9b19983f46b9c34da864516d871fee1647f8d4faf1df3d63314e3137ec9c9674",
           "app": {
-            "size": 1881536,
-            "sha256": "4a7e7638390ca7dd04778162cc3ab78af9035e9f2d2b4fbb64bb2916494c58b8",
-            "md5": "8da12000e9fe9a6649331f5e59255280"
+            "size": 1923056,
+            "sha256": "8cf9d97b02ed3c4799401278584e1ff9b838ebd7b72dbba7ddd946eb846406ce",
+            "md5": "704e8e388232104c98e27779a195efc1"
           }
         }
       ]

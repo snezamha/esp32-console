@@ -10,7 +10,9 @@
     "firmware:build": "node scripts/build-firmware.mjs",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "projects:build": "node scripts/build-projects.mjs",
+    "projects:verify": "node scripts/verify-projects.mjs"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.10",

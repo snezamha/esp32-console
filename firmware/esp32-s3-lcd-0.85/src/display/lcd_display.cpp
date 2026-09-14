@@ -106,7 +106,10 @@ void LcdDisplay::SetStatus(const char* status) {
 
 void LcdDisplay::ShowNotification(const char* notification, int duration_ms) {
   notification_ = notification;
-  notification_until_ = millis() + duration_ms;
+  // Long messages need enough time for one complete pass through the narrow status bar.
+  const int travel = std::max(0, Canvas::TextWidth(notification) - 16);
+  const int readable_ms = travel ? 2400 + (travel * 1000 + 23) / 24 : 0;
+  notification_until_ = millis() + std::max(duration_ms, readable_ms);
   dirty_ = true;
 }
 
@@ -176,6 +179,10 @@ void LcdDisplay::UpdateStatusBar(bool update_all) {
 }
 
 void LcdDisplay::Loop() {
+  if (canvas_ && canvas_->HasMarquee() && millis() - last_marquee_frame_ >= 33) {
+    last_marquee_frame_ = millis();
+    dirty_ = true;
+  }
   // Charging animation in the battery icon.
   if (battery_icon_level_ == 8 && millis() - last_charge_frame_ >= 350) {
     last_charge_frame_ = millis();
@@ -212,6 +219,7 @@ void LcdDisplay::Flush() {
 
 void LcdDisplay::Render() {
   auto& c = *canvas_;
+  c.BeginFrame(millis());
   c.Fill(theme_->background);
   c.FillRect(0, kTopBarHeight, width_, height_ - kTopBarHeight, theme_->content_background);
 
@@ -223,6 +231,7 @@ void LcdDisplay::Render() {
   DrawTopBar();
   if (low_battery_popup_) DrawLowBatteryPopup();
   if (overlay_renderer_) overlay_renderer_(c, 0, 0, width_, height_, *theme_);
+  c.EndFrame();
 }
 
 void LcdDisplay::DrawTopBar() {
@@ -259,12 +268,14 @@ void LcdDisplay::DrawTopBar() {
   // Centered status, or notification while one is active, kept clear of the icons
   const std::string& text = notification_.empty() ? status_ : notification_;
   const int room = x - kSpacing - left;
-  const size_t max_chars = std::max(0, (room + 1) / 6);
-  const std::string shown = text.substr(0, max_chars);
-  int text_x = (width_ - Canvas::TextWidth(shown.c_str())) / 2;
-  text_x = std::min(text_x, x - kSpacing - Canvas::TextWidth(shown.c_str()));
-  text_x = std::max(text_x, left);
-  c.Text(text_x, (kTopBarHeight - 7) / 2, shown.c_str(), theme_->text);
+  const int text_width = Canvas::TextWidth(text.c_str());
+  if (text_width > room) {
+    c.TextMarquee(left, (kTopBarHeight - 7) / 2, room, text.c_str(), theme_->text);
+  } else {
+    int text_x = (width_ - text_width) / 2;
+    text_x = std::max(left, std::min(text_x, x - kSpacing - text_width));
+    c.TextMarquee(text_x, (kTopBarHeight - 7) / 2, room, text.c_str(), theme_->text);
+  }
 }
 
 void LcdDisplay::DrawBatteryIcon(int x, int y) {
@@ -328,5 +339,5 @@ void LcdDisplay::DrawLowBatteryPopup() {
   const int x = (width_ - w) / 2;
   const int y = height_ - h - kSpacing * 4;
   c.FillRoundRect(x, y, w, h, kSpacing * 4, theme_->low_battery);
-  c.TextCentered(width_ / 2, y + (h - 7) / 2, Lang::Strings::BATTERY_NEED_CHARGE, Color(0xFFFFFF));
+  c.TextMarquee(x + 4, y + (h - 7) / 2, w - 8, Lang::Strings::BATTERY_NEED_CHARGE, Color(0xFFFFFF), 1, true);
 }

@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, formatSettingValue, sanitizeSettings } from "@/lib/device-settings";
-import { syncBoard, type SyncResult } from "@/lib/device-store";
+import { syncBoard, weatherSettingsForBoard, type SyncResult } from "@/lib/device-store";
 import { weatherPayload } from "@/lib/weather";
 import type { TestResult } from "@/lib/device-types";
 
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
     uptime: int("uptime", 0),
     rev: int("rev", 0),
     settings: Object.keys(reported).length ? sanitizeSettings(reported, DEFAULT_SETTINGS) : null,
-    projectSupported: form.has("s.project"),
+    projectSupported: field("project_api") === "1",
     tests,
     ota: OTA_STATES.includes(otaState)
       ? {
@@ -110,7 +110,9 @@ export async function POST(request: Request) {
     const settings = { ...report.settings, ...result.settings };
     if (settings.project === "weather") {
       const budget = Math.max(1, Math.min(4000, 8500 - (Date.now() - startedAt)));
-      lines.push(`weather=${await weatherPayload(settings, budget)}`);
+      // Coordinates are console-side project configuration, not base firmware settings.
+      const device = await weatherSettingsForBoard(report.token);
+      if (device) lines.push(`project_data=${encodeURIComponent(await weatherPayload(device, budget))}`);
     }
   }
   return reply(lines);

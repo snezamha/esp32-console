@@ -22,7 +22,7 @@ const MAX_COMMANDS = 20;
 /** How often a held request re-checks the database while waiting for a change. */
 const POLL_INTERVAL_MS = 800;
 /** Commands the board confirms with an explicit ack; the rest are done once delivered. */
-const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget"];
+const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install"];
 
 type PendingEdits = Partial<Record<keyof DeviceSettings, { value: DeviceSettings[keyof DeviceSettings]; rev: number }>>;
 const json = (value: unknown) => value as Prisma.InputJsonValue;
@@ -56,7 +56,7 @@ function toPublic(row: DeviceRow): PublicDevice {
     rev: row.rev,
     settings: effectiveSettings(row),
     activeProject: (row.reported as DeviceSettings).project ?? "none",
-    projectSupported: row.board === "esp32-s3-lcd-0.85" && Object.hasOwn(row.reported as object, "project"),
+    projectSupported: row.board === "esp32-s3-lcd-0.85" && (row.reported as Record<string, unknown>)._project_api === 1,
     settingsReported: row.settingsReported,
     commands: (row.commands as DeviceCommand[]).slice(-10),
     tests: row.tests as Record<string, TestResult>,
@@ -149,7 +149,8 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
 
   const pending = { ...(row.pending as PendingEdits) };
   for (const key of Object.keys(pending) as (keyof DeviceSettings)[]) {
-    const projectConfirmed = key !== "project" || (report.projectSupported && report.settings?.project === pending[key]!.value);
+    if (key === "project" && report.projectSupported) { delete pending[key]; continue; } // Clear obsolete built-in selections after upgrade.
+    const projectConfirmed = key !== "project" || report.settings?.project === pending[key]!.value;
     if (pending[key]!.rev <= report.rev && projectConfirmed) delete pending[key];
   }
   data.pending = json(pending);
@@ -157,7 +158,11 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
   if (report.settings) {
     const settings: Partial<DeviceSettings> = { ...report.settings };
     if (!report.projectSupported) delete settings.project;
-    data.reported = json(settings);
+    data.reported = json({ ...settings,
+      weather_lat: (row.reported as DeviceSettings).weather_lat ?? DEFAULT_SETTINGS.weather_lat,
+      weather_lon: (row.reported as DeviceSettings).weather_lon ?? DEFAULT_SETTINGS.weather_lon,
+      _project_api: report.projectSupported ? 1 : 0,
+    });
     data.settingsReported = true;
   }
 
@@ -183,7 +188,7 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     });
   }
   commands = commands.map((c) => {
-    if (c.status !== "queued" || now.getTime() - c.createdAt <= COMMAND_TTL_MS) return c;
+    if ((c.status !== "queued" && !(c.type === "project_install" && c.status === "sent")) || now.getTime() - c.createdAt <= COMMAND_TTL_MS) return c;
     commandsChanged = true;
     return { ...c, status: "failed" as const, result: "Device did not come online", updatedAt: now.getTime() };
   });
@@ -369,6 +374,11 @@ export async function updateDevice(
       let changed = false;
       for (const key of Object.keys(patch.settings) as (keyof DeviceSettings)[]) {
         if (patch.settings[key] === currentSettings[key]) continue;
+        if (key === "weather_lat" || key === "weather_lon") {
+          const reported = { ...(data.reported as object ?? current.reported as object), [key]: patch.settings[key] };
+          data.reported = json(reported);
+          continue;
+        }
         pending[key] = { value: patch.settings[key], rev: current.rev + 1 };
         changed = true;
       }
@@ -396,6 +406,10 @@ export async function queueCommand(
   const row = await mutateDevice(id, (current) => {
     if (current.owner !== owner) return null;
     let commands = current.commands as DeviceCommand[];
+    if ((type === "project_install" || type === "ota") && commands.some((c) =>
+      (c.type === "project_install" || c.type === "ota") && c.status === "sent")) {
+      throw new Error("An installation is already running.");
+    }
     // A newer command of the same kind replaces one that has not been delivered yet.
     commands = commands.filter((c) => !(c.status === "queued" && c.type === type));
     commands = [
@@ -433,4 +447,11 @@ export async function waitForChange(owner: string, signature: string, ms: number
 
 export function rowsSignature(devices: PublicDevice[]) {
   return devices.map((d) => `${d.id}:${d.rev}:${d.lastSeen}:${d.commands.length}`).join(",");
+}
+
+/** Project configuration stays in the console; no project-specific fields are sent to the base. */
+export async function weatherSettingsForBoard(token: string): Promise<DeviceSettings | null> {
+  if (!token) return null;
+  const row = await db.device.findUnique({ where: { token } });
+  return row ? effectiveSettings(row) : null;
 }

@@ -120,4 +120,5 @@ class LcdDisplay {
   ContentRenderer content_renderer_;
   ContentRenderer overlay_renderer_;
   uint32_t last_charge_frame_ = 0;
+  uint32_t last_marquee_frame_ = 0;
 };

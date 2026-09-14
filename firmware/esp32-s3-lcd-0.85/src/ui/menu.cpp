@@ -10,8 +10,6 @@
 
 namespace {
 constexpr int kRowHeight = 12;
-constexpr uint32_t kMarqueePauseMs = 900;
-constexpr float kMarqueeSpeed = 22.0f;  // px per second
 const std::string kEmpty;
 
 // Exponential ease-out step; returns true while still moving.
@@ -83,7 +81,6 @@ void MenuView::ResetMotion(int slide_direction) {
   scroll_y_ = std::clamp(highlight_y_ - (content_height_ - kRowHeight) / 2.0f, 0.0f, max_scroll);
   // New pages come in from the right; going back comes in from the left.
   slide_x_ = slide_direction * content_width_ * 0.6f;
-  selected_at_ = millis();
   last_animate_ = 0;
 }
 
@@ -91,7 +88,6 @@ void MenuView::SetSelected(int index) {
   auto page = Current();
   if (!page) return;
   page->selected = index;
-  selected_at_ = millis();
 }
 
 void MenuView::Next() {
@@ -184,7 +180,7 @@ bool MenuView::Animate(uint32_t now_ms) {
     editor_t_ += (editor_target - editor_t_) * k_fast;
     moving = true;
   }
-  return moving || marquee_active_;
+  return moving;
 }
 
 void MenuView::Draw(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
@@ -192,7 +188,6 @@ void MenuView::Draw(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   if (!page) return;
   content_width_ = w;
   content_height_ = h;
-  marquee_active_ = false;
 
   const int count = static_cast<int>(page->items.size());
   const int offset_x = static_cast<int>(std::lround(slide_x_));
@@ -267,19 +262,20 @@ void MenuView::DrawRow(Canvas& c, const MenuItem& item, int index, int x, int ro
                kRowHeight - 8, item.color ? item.color(theme) : theme.info);
     trailing_left = right - bar_w;
   } else if (item.value) {
-    const std::string value = item.value().substr(0, 9);
+    const std::string value = item.value();
     const uint16_t color = item.color ? item.color(theme) : theme.muted;
-    int vx = right - Canvas::TextWidth(value.c_str());
+    const int value_width = std::min(53, Canvas::TextWidth(value.c_str()));
+    int vx = right - value_width;
     if (item.kind == MenuItem::Kind::Choice) {
       // ◂ value ▸ : Power cycles the value.
       const int arrows_color = selected ? theme.text : theme.muted;
       c.FillTriangle(right, row_y + 6, right - 2, row_y + 4, right - 2, row_y + 8, arrows_color);
       vx -= 5;
       c.FillTriangle(vx - 5, row_y + 6, vx - 3, row_y + 4, vx - 3, row_y + 8, arrows_color);
-      c.Text(vx, text_y, value.c_str(), color);
+      c.TextMarquee(vx, text_y, value_width, value.c_str(), color);
       trailing_left = vx - 6;
     } else {
-      c.Text(vx, text_y, value.c_str(), color);
+      c.TextMarquee(vx, text_y, value_width, value.c_str(), color);
       trailing_left = vx;
     }
   } else if (item.kind == MenuItem::Kind::Submenu) {
@@ -287,32 +283,11 @@ void MenuView::DrawRow(Canvas& c, const MenuItem& item, int index, int x, int ro
     trailing_left = right - 3;
   }
 
-  // Label, scrolling when it does not fit and the row is selected.
+  // Every overflowing label uses the same clipped right-to-left animation.
   const int label_room = trailing_left - 3 - label_x;
-  const int label_w = Canvas::TextWidth(item.label.c_str());
   const uint16_t label_color = item.kind == MenuItem::Kind::Hold ? theme.fail : theme.text;
-  if (label_w <= label_room || label_room <= 0) {
-    c.Text(label_x, text_y, item.label.c_str(), label_color);
-    return;
-  }
+  c.TextMarquee(label_x, text_y, label_room, item.label.c_str(), label_color);
 
-  int shift = 0;
-  if (selected && !editing_) {
-    const uint32_t elapsed = millis() - selected_at_;
-    const int travel = label_w - label_room + 6;
-    if (elapsed > kMarqueePauseMs) {
-      // Scroll to the end, pause, then jump back.
-      const float t = (elapsed - kMarqueePauseMs) / 1000.0f * kMarqueeSpeed;
-      const float cycle = travel + kMarqueeSpeed * 1.2f;
-      const float pos = std::fmod(t, cycle);
-      shift = static_cast<int>(std::min(pos, static_cast<float>(travel)));
-    }
-    marquee_active_ = true;
-  }
-  const Canvas::Clip saved = c.GetClip();
-  c.IntersectClip(label_x, row_y, label_room, kRowHeight);
-  c.Text(label_x - shift, text_y, item.label.c_str(), label_color);
-  c.RestoreClip(saved);
 }
 
 void MenuView::DrawEditor(Canvas& c, const MenuItem& item, int x, int y, int w, int h,
@@ -334,10 +309,10 @@ void MenuView::DrawEditor(Canvas& c, const MenuItem& item, int x, int y, int w, 
   c.IntersectClip(cx + 1, cy + 1, cw - 2, ch - 2);
 
   const int mid = cx + cw / 2;
-  c.TextCentered(mid, cy + 6, item.label.c_str(), theme.muted);
+  c.TextMarquee(cx + 6, cy + 6, cw - 12, item.label.c_str(), theme.muted, 1, true);
 
   const std::string value = item.value ? item.value() : "";
-  c.TextCentered(mid, cy + 20, value.c_str(), theme.text, 2);
+  c.TextMarquee(cx + 20, cy + 20, cw - 40, value.c_str(), theme.text, 2, true);
 
   // − and + hints at the sides of the value
   const int hint_y = cy + 26;

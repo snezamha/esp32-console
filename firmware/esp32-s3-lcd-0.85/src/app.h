@@ -66,10 +66,6 @@ class App {
   // Beeps and flashes the LED ring so the device can be found.
   void Identify();
 
-  std::string previous_project_ = "none";
-  uint32_t project_loading_until_ = 0;
-  std::string weather_data_;
-  uint32_t weather_updated_at_ = 0;
   MenuView menu_;
   uint8_t buttons_pressed_ = 0;
   uint32_t last_clock_tick_ = 0;

@@ -1,0 +1,28 @@
+{
+  "projects": [
+    {
+      "id": "analog-clock",
+      "name": "Analog clock",
+      "version": "1.0.0",
+      "description": "A live clock using the board’s configured time zone.",
+      "board": "esp32-s3-lcd-0.85",
+      "abi": 1,
+      "path": "/projects/esp32-s3-lcd-0.85/analog-clock/1.0.0.elf",
+      "size": 1572,
+      "md5": "a04b5ba6e440e505a838b1c94faba2d3",
+      "sha256": "fa3654dac290742904f0d5044680b22df7e2dbd5e53708a81ba82d76b487b0cf"
+    },
+    {
+      "id": "weather",
+      "name": "Weather",
+      "version": "1.0.0",
+      "description": "Current temperature and conditions for your chosen location.",
+      "board": "esp32-s3-lcd-0.85",
+      "abi": 1,
+      "path": "/projects/esp32-s3-lcd-0.85/weather/1.0.0.elf",
+      "size": 1128,
+      "md5": "3b710d7cbef5939ea9b8c6523936630a",
+      "sha256": "bd89fd986f48af9eb9943d45c2a46e60f1a5d488f229036988991988b491929d"
+    }
+  ]
+}

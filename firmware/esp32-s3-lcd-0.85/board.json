@@ -10,6 +10,11 @@
       "name": "nvs",
       "offset": 36864,
       "size": 20480
+    },
+    {
+      "name": "projects",
+      "offset": 6750208,
+      "size": 1572864
     }
   ]
 }

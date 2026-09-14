@@ -1,0 +1,7 @@
+Espressif esp-iot-solution ELF loader, pinned commit `6958385313b0e4fc1f3de259b1d677fca7d7d236` (Apache-2.0).
+
+https://github.com/espressif/esp-iot-solution/tree/6958385313b0e4fc1f3de259b1d677fca7d7d236/components/elf_loader
+
+Arduino adaptation: explicit loader_config.h, flattened arch source, ABI-only symbol resolver. Project modules receive host functions through a versioned API; no libc or IDF symbols are exported.
+
+Integration fixes: relative private-header includes, null released allocation pointers on load failures, propagate unsupported relocation errors.

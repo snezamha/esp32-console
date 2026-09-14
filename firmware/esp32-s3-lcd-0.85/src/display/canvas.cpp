@@ -164,8 +164,55 @@ int Canvas::TextWidth(const char* text, int scale) {
   return len ? (len * 6 - 1) * scale : 0;
 }
 
+void Canvas::BeginFrame(uint32_t now_ms) {
+  frame_time_ = now_ms;
+  ++frame_;
+  marquee_active_ = false;
+}
+
+void Canvas::EndFrame() {
+  for (auto it = marquees_.begin(); it != marquees_.end();) {
+    if (it->second.frame != frame_) it = marquees_.erase(it);
+    else ++it;
+  }
+}
+
+void Canvas::TextMarquee(int x, int y, int width, const char* text, uint16_t color,
+                         int scale, bool centered) {
+  if (width <= 0 || scale <= 0 || !text || !*text) return;
+  const Clip saved = GetClip();
+  IntersectClip(x, y, width, 7 * scale);
+  if (clip_x1_ <= clip_x0_ || clip_y1_ <= clip_y0_) {
+    RestoreClip(saved);
+    return;
+  }
+  const int text_width = TextWidth(text, scale);
+  if (text_width <= width) {
+    Text(centered ? x + (width - text_width) / 2 : x, y, text, color, scale);
+  } else {
+    auto& state = marquees_[std::make_tuple(x, y, width, scale)];
+    if (state.text != text || state.frame + 1 < frame_) {
+      state.text = text;
+      state.started_at = frame_time_;
+    }
+    state.frame = frame_;
+    // Pause at each end so both the beginning and the final characters are readable.
+    constexpr uint32_t pause_ms = 1200;
+    constexpr uint32_t pixels_per_second = 24;
+    const int travel = text_width - width;
+    const uint32_t move_ms = (static_cast<uint32_t>(travel) * 1000 + pixels_per_second - 1) / pixels_per_second;
+    const uint32_t phase = (frame_time_ - state.started_at) % (pause_ms * 2 + move_ms);
+    const int shift = phase <= pause_ms ? 0 :
+        std::min(travel, static_cast<int>((phase - pause_ms) * pixels_per_second / 1000));
+    Text(x - shift, y, text, color, scale);
+    marquee_active_ = true;
+  }
+  RestoreClip(saved);
+}
+
 void Canvas::TextCentered(int cx, int y, const char* text, uint16_t color, int scale) {
-  Text(cx - TextWidth(text, scale) / 2, y, text, color, scale);
+  const int half = std::min(cx - clip_x0_, clip_x1_ - cx);
+  TextMarquee(cx - half, y, half * 2, text, color, scale, true);
 }
 
 std::vector<std::string> Canvas::Wrap(const std::string& text, int max_width, int scale) {

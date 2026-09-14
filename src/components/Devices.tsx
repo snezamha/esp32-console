@@ -384,7 +384,7 @@ function MessageDialog({ device, onClose, onSent }: { device: PublicDevice; onCl
   };
 
   return (
-    <Sheet open onClose={onClose} title="Send message" subtitle={`Shown on the screen of ${deviceName(device)} for 5 seconds.`}>
+    <Sheet open onClose={onClose} title="Send message" subtitle={`Shown on the screen of ${deviceName(device)} for at least 5 seconds. Long messages scroll on firmware v1.0.3 or later.`}>
       <form onSubmit={submit} className="space-y-3">
         <input
           value={text}

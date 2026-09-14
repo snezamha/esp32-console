@@ -13,11 +13,8 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/devices/[i
   const current = (await listDevices(user.id)).find((d) => d.id === id);
   if (!current) return Response.json({ error: "Device not found." }, { status: 404 });
 
-  if (body.settings?.project !== undefined && !current.projectSupported) {
-    return Response.json({ error: "Update the board firmware to enable projects." }, { status: 400 });
-  }
-  if (body.settings?.project !== undefined && !["none", "weather", "analog-clock"].includes(body.settings.project)) {
-    return Response.json({ error: "Unknown project." }, { status: 400 });
+  if (body.settings?.project !== undefined) {
+    return Response.json({ error: "Load a project package through the project installation command." }, { status: 400 });
   }
 
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 40) : undefined;

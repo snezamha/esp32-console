@@ -129,10 +129,23 @@ Add a board by creating `firmware/<board>/` with a sketch of the same name, `ver
 
 ## Display projects
 
-The **Projects** tab loads one display project per linked board. Projects share the base firmware and run only in the content area below the status bar; the device menu remains available. Firmware **v1.0.2 or later** is required. Update existing boards from **Devices → Details → Firmware**.
+Projects are **independent native Xtensa ELF binaries**, uploaded into the board’s flash filesystem. Their implementations live in `projects/weather/main.c` and `projects/analog-clock/main.c`, outside the base firmware. The base firmware contains only the generic Espressif ELF loader and the versioned display API (`src/runtime/project_api.h`). Project binaries are never linked into the firmware.
 
-- **Weather:** current temperature and conditions from [Open-Meteo](https://open-meteo.com/), cached for 10 minutes. Set latitude and longitude before loading (Berlin is the default). The board needs Wi-Fi and a connection to the console to receive weather. Failed requests show “Unavailable”; disconnected boards mark their last reading after 20 minutes.
-- **Analog clock:** hour, minute and second hands using the board’s time zone and synchronized time.
-- **Default display:** restore the base firmware’s device and connection screen.
+Update the base firmware to **v1.0.4 or later** once, then use the **Projects** tab to upload Weather or Analog clock. The board downloads the selected file, checks its size and MD5, writes it into an inactive project slot, and activates it after successful loading. The previous project stays installed if download, validation or writing fails. Only one module executes at a time. **Default display** unloads the active project. Installing a project does not replace the base firmware or require a restart.
 
-Selection and weather coordinates survive restart and firmware updates in NVS. Loading remains visible until the board reports the new project; changes queued while offline apply when the board reconnects. No database migration is needed: project state uses the existing settings synchronization.
+- **Weather:** temperature and conditions from [Open-Meteo](https://open-meteo.com/), cached for 10 minutes. Coordinates are stored in the console (Berlin by default). Wi-Fi and the console connection are needed for new readings.
+- **Analog clock:** synchronized board time and the configured time zone.
+
+All module drawing is clipped below the status bar. The base provides marquee text, drawing primitives, time, and generic project data through the C ABI. The device menu remains available. The selected project and uploaded files survive restart and base firmware updates. The project filesystem occupies the existing `spiffs` partition at `0x670000` (1.5 MB); the web flasher preserves it alongside NVS. No database migration is required.
+
+Build projects independently:
+
+```sh
+pnpm projects:build
+```
+
+This writes separate `.elf` files into `public/projects/<board>/<project>/<version>.elf` and updates `projects/manifest.json`. It uses the installed ESP32-S3 Arduino compiler; set `PROJECT_CC` to `xtensa-esp32s3-elf-gcc` on other setups. New projects implement `app_main(int argc, char **argv)` using the shared `ProjectFrame` ABI and provide a `project.json` manifest. Modules must have no unresolved imports and return after each frame.
+
+Build the generic base separately with `pnpm firmware:build`. Firmware v1.0.4 retains automatic right-to-left marquee for overflowing text, with pauses at both ends; long notifications stay visible for a full pass.
+
+The loader is vendored from [Espressif’s ELF loader](https://github.com/espressif/esp-iot-solution/tree/6958385313b0e4fc1f3de259b1d677fca7d7d236/components/elf_loader), with pinned provenance and Apache-2.0 license under `src/runtime/elf_loader/`.
