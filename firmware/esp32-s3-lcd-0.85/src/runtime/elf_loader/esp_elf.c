@@ -192,7 +192,8 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
                          shdr[i].addr, shdr[i].size, shdr[i].offset);
 
                 elf->sec[ELF_SEC_TEXT].v_addr  = shdr[i].addr;
-                elf->sec[ELF_SEC_TEXT].size    = ELF_ALIGN(shdr[i].size, 4);
+                // Keep the virtual range exact: alignment padding may overlap .rodata.
+                elf->sec[ELF_SEC_TEXT].size    = shdr[i].size;
                 elf->sec[ELF_SEC_TEXT].offset  = shdr[i].offset;
 
                 ESP_LOGD(TAG, ".text   offset is 0x%lx size is 0x%x",

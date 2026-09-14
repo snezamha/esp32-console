@@ -10,7 +10,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
   const device = (await listDevices(user.id)).find((entry) => entry.id === id);
   if (!device) return Response.json({ error: "Device not found." }, { status: 404 });
   try {
-    if (!device.projectSupported || device.firmware.localeCompare("1.0.7", undefined, { numeric: true }) < 0) throw new Error("Update the base firmware to v1.0.7 before uploading a project file.");
+    if (!device.projectSupported || device.firmware.localeCompare("1.0.8", undefined, { numeric: true }) < 0) throw new Error("Update the base firmware to v1.0.8 before uploading a project file.");
     if (isOtaActive(device.ota)) throw new Error("A firmware installation is running.");
     if (Number(request.headers.get("content-length")) > 140 * 1024) throw new Error("Project files must be at most 128 KB.");
     const form = await request.formData();

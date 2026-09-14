@@ -103,7 +103,7 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
   const stopping = device.commands.some((command) => command.type === "project_stop" && projectPending(command));
   const loading = projectPending(installation);
   const disabled = busy || loading || stopping || !device.projectSupported || isOtaActive(device.ota);
-  const modern = device.firmware.localeCompare("1.0.7", undefined, { numeric: true }) >= 0;
+  const modern = device.firmware.localeCompare("1.0.8", undefined, { numeric: true }) >= 0;
   const run = async (action: () => Promise<void>) => {
     setBusy(true); setError(null);
     try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
@@ -138,11 +138,11 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
     }).finally(() => { setUpload(null); xhr.current = null; });
   });
   const transfer = installation?.transfer;
-  const logs = transfer?.logs ?? (installation ? [{ seq: 0, at: installation.createdAt, level: "info", message: "Installation requested." }, { seq: 1, at: installation.updatedAt, level: installation.status === "failed" ? "error" : "info", message: installation.result || (installation.status === "queued" ? "Waiting for board. Request expires after 10 minutes." : "Request delivered. Update to firmware 1.0.7 for board logs and the corrected native runtime.") }] : []);
+  const logs = transfer?.logs ?? (installation ? [{ seq: 0, at: installation.createdAt, level: "info", message: "Installation requested." }, { seq: 1, at: installation.updatedAt, level: installation.status === "failed" ? "error" : "info", message: installation.result || (installation.status === "queued" ? "Waiting for board. Request expires after 10 minutes." : "Request delivered. Update to firmware 1.0.8 for board logs and the corrected native runtime.") }] : []);
   const logEnd = useRef<HTMLDivElement | null>(null);
   useEffect(() => { logEnd.current?.scrollIntoView({ block: "nearest" }); }, [logs.length]);
   return <div className="space-y-4">
-    {!modern && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Install base firmware v1.0.7 in Devices → Details → Firmware before loading a project. It uses internal executable memory and preserves installation diagnostics across a restart.</p>}
+    {!modern && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Install base firmware v1.0.8 in Devices → Details → Firmware before loading a project. It uses internal executable memory and preserves installation diagnostics across a restart.</p>}
     <section className={cardClass + " flex items-center justify-between gap-3 p-4"}><div><p className="text-xs text-zinc-500">Active on display</p><p className="mt-1 text-sm font-semibold">{PROJECTS.find((p) => p.id === device.activeProject)?.name ?? device.activeProject}</p></div><span className={device.online ? "text-xs text-emerald-600" : "text-xs text-zinc-500"}>{device.online ? "Board online" : "Board offline"}</span></section>
     <ErrorText>{error}</ErrorText>
     {installation && <section className={cardClass + " space-y-3 p-4"}>
