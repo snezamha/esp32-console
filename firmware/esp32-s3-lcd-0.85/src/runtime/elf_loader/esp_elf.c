@@ -278,8 +278,14 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
     /* Dump ".text" from ELF to executable space memory */
 
     elf->sec[ELF_SEC_TEXT].addr = (Elf32_Addr)elf->ptext;
-    memcpy(elf->ptext, pbuf + elf->sec[ELF_SEC_TEXT].offset,
-           elf->sec[ELF_SEC_TEXT].size);
+    // Byte stores into internal executable IRAM can cause LoadStoreError.
+    for (size_t offset = 0; offset < elf->sec[ELF_SEC_TEXT].size; offset += 4) {
+        uint32_t word = 0;
+        size_t remaining = elf->sec[ELF_SEC_TEXT].size - offset;
+        memcpy(&word, pbuf + elf->sec[ELF_SEC_TEXT].offset + offset,
+               remaining < 4 ? remaining : 4);
+        ((uint32_t *)elf->ptext)[offset / 4] = word;
+    }
 
 #ifdef CONFIG_ELF_LOADER_SET_MMU
     if (esp_elf_arch_init_mmu(elf)) {

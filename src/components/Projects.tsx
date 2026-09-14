@@ -103,7 +103,7 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
   const stopping = device.commands.some((command) => command.type === "project_stop" && projectPending(command));
   const loading = projectPending(installation);
   const disabled = busy || loading || stopping || !device.projectSupported || isOtaActive(device.ota);
-  const modern = device.firmware.localeCompare("1.0.5", undefined, { numeric: true }) >= 0;
+  const modern = device.firmware.localeCompare("1.0.7", undefined, { numeric: true }) >= 0;
   const run = async (action: () => Promise<void>) => {
     setBusy(true); setError(null);
     try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
@@ -119,7 +119,7 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
     onUpdated(result.device);
   };
   const install = (project: string) => run(async () => {
-    await save();
+    if (project !== "none") await save();
     await command({ type: "project_install", project, latitude: Math.round(Number(lat) * 10000), longitude: Math.round(Number(lon) * 10000) });
   });
   const uploadFile = () => run(async () => {
@@ -138,18 +138,18 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
     }).finally(() => { setUpload(null); xhr.current = null; });
   });
   const transfer = installation?.transfer;
-  const logs = transfer?.logs ?? (installation ? [{ seq: 0, at: installation.createdAt, level: "info", message: "Installation requested." }, { seq: 1, at: installation.updatedAt, level: installation.status === "failed" ? "error" : "info", message: installation.result || (installation.status === "queued" ? "Waiting for board. Request expires after 10 minutes." : "Request delivered. Update to firmware 1.0.5 for detailed board logs.") }] : []);
+  const logs = transfer?.logs ?? (installation ? [{ seq: 0, at: installation.createdAt, level: "info", message: "Installation requested." }, { seq: 1, at: installation.updatedAt, level: installation.status === "failed" ? "error" : "info", message: installation.result || (installation.status === "queued" ? "Waiting for board. Request expires after 10 minutes." : "Request delivered. Update to firmware 1.0.7 for board logs and the corrected native runtime.") }] : []);
   const logEnd = useRef<HTMLDivElement | null>(null);
   useEffect(() => { logEnd.current?.scrollIntoView({ block: "nearest" }); }, [logs.length]);
   return <div className="space-y-4">
-    {!modern && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Install base firmware v1.0.5 in Devices → Details → Firmware for live logs, safe stopping and protection from automatic shutdown during installation.</p>}
+    {!modern && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Install base firmware v1.0.7 in Devices → Details → Firmware before loading a project. It uses internal executable memory and preserves installation diagnostics across a restart.</p>}
     <section className={cardClass + " flex items-center justify-between gap-3 p-4"}><div><p className="text-xs text-zinc-500">Active on display</p><p className="mt-1 text-sm font-semibold">{PROJECTS.find((p) => p.id === device.activeProject)?.name ?? device.activeProject}</p></div><span className={device.online ? "text-xs text-emerald-600" : "text-xs text-zinc-500"}>{device.online ? "Board online" : "Board offline"}</span></section>
     <ErrorText>{error}</ErrorText>
     {installation && <section className={cardClass + " space-y-3 p-4"}>
       <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Installation · {transfer?.name ?? new URLSearchParams(installation.arg).get("id")}</h3><span className="text-xs capitalize">{transfer?.phase ?? installation.status}</span></div>
       <progress aria-label="Board download progress" value={transfer?.progress ?? 0} max={100} className="h-2 w-full accent-blue-600" />
       <p className="text-xs text-zinc-500">{transfer ? `${transfer.progress}% · ${transfer.bytes.toLocaleString()} / ${transfer.total.toLocaleString()} bytes${transfer.version ? ` · v${transfer.version}` : ""}` : "Waiting for installation report"}</p>
-      {loading && !modern && <p className="text-xs text-amber-600">Stopping on this older firmware restarts the board to interrupt its download.</p>}
+      {loading && device.firmware.localeCompare("1.0.5", undefined, { numeric: true }) < 0 && <p className="text-xs text-amber-600">Stopping on this older firmware restarts the board to interrupt its download.</p>}
       {loading && !device.online && <p role="status" className="text-xs text-amber-600">Board offline. Reconnect its power and Wi-Fi. You can cancel this request; waiting is limited.</p>}
       <div role="log" aria-label="Installation logs" aria-live="polite" className="max-h-64 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{logs.map((log) => <p key={log.seq} className={log.level === "error" ? "text-red-400" : ""}>{new Date(log.at).toLocaleTimeString()} · {log.message}</p>)}<div ref={logEnd} /></div>
       <ErrorText>{installation.status === "failed" && transfer?.phase !== "cancelled" ? installation.result : null}</ErrorText>
@@ -168,8 +168,12 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
       <div className="flex justify-between"><h3 className="text-sm font-semibold">{project.name}</h3>{device.activeProject === project.id && <span className="text-xs text-emerald-600">Active</span>}</div>
       <p className="text-xs text-zinc-500">{project.description}</p><p className="text-xs text-zinc-500">v{project.version} · {(project.size / 1024).toFixed(1)} KB · Single project file</p>
       <a href={project.path} download className="text-xs text-blue-600 underline">Download project file</a>
-      <Button disabled={disabled || project.board !== device.board} onClick={() => install(project.id)} className={accentButton + " mt-auto h-10 w-full"}>{device.activeProject === project.id ? "Reinstall project" : "Load project"}</Button>
-    </section>)}</div>
+      <Button disabled={disabled || !modern || project.board !== device.board} onClick={() => install(project.id)} className={accentButton + " mt-auto h-10 w-full"}>{device.activeProject === project.id ? "Reinstall project" : "Load project"}</Button>
+    </section>)}<section className={cardClass + " flex flex-col gap-3 p-4"}>
+      <div className="flex justify-between"><h3 className="text-sm font-semibold">Default display</h3>{device.activeProject === "none" && <span className="text-xs text-emerald-600">Active</span>}</div>
+      <p className="text-xs text-zinc-500">Return the board to the original firmware display. Unloads the current project while keeping board settings.</p>
+      <Button disabled={disabled || device.activeProject === "none"} onClick={() => install("none")} className={accentButton + " mt-auto h-10 w-full"}>{device.activeProject === "none" ? "Active project" : "Load default display"}</Button>
+    </section></div>
     <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Project settings</h3>
       <p className="text-xs text-zinc-500">Save settings independently of installation. Applied when the board next connects.</p>
       <fieldset className="space-y-3"><legend className="text-xs font-medium">Weather · location and units</legend>
@@ -181,7 +185,7 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
       <Button disabled={busy || loading} onClick={() => run(save)} className={accentButton + " h-10 px-4"}>Save settings</Button>
     </section>
     <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Upload a project file</h3><p className="text-xs text-zinc-500">Choose one .elf file containing its project identity. No companion files are needed. Maximum 128 KB.</p><input aria-label="Project file" type="file" accept=".elf" disabled={busy} className="w-full text-xs" onChange={async (e) => { const selected = e.target.files?.[0]; setFile(null); setFileName(""); setError(null); if (!selected) return; try { const meta = inspectProject(new Uint8Array(await selected.arrayBuffer())); setFile(selected); setFileName(`${meta.name} · v${meta.version} · ${selected.size.toLocaleString()} bytes`); } catch (err) { setError(errorMessage(err)); } }} />{fileName && <p className="text-xs text-zinc-500">{fileName}</p>}{upload !== null && <div role="status" className="text-xs">Uploading to console: {upload}%<progress value={upload} max={100} className="w-full" /><Button onClick={() => xhr.current?.abort()} className="mt-2 underline">Stop upload</Button></div>}<Button disabled={disabled || !modern || !file} onClick={uploadFile} className={accentButton + " h-10 px-4"}>Upload and load</Button></section>
-    <Button disabled={disabled || device.activeProject === "none"} onClick={() => install("none")} className="h-10 w-full rounded-xl border border-zinc-300 text-xs">Unload project · restore default display</Button>
+    {device.commands.some((c) => c.type.startsWith("project_") && !projectPending(c)) && <Button disabled={busy} onClick={() => run(async () => { const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}/projects`, "DELETE"); onUpdated(result.device); })} className="h-10 w-full rounded-xl border border-zinc-300 text-xs">Clear completed history and logs</Button>}
     {device.commands.filter((c) => c.type === "project_install").length > 1 && <details className={cardClass + " p-4"}><summary className="cursor-pointer text-xs">Installation history</summary>{device.commands.filter((c) => c.type === "project_install" && c.id !== installation?.id).reverse().map((c) => <div key={c.id} className="mt-3 text-xs"><p>{new Date(c.createdAt).toLocaleString()} · {c.transfer?.name ?? new URLSearchParams(c.arg).get("id")} · {c.transfer?.phase ?? c.status}</p><p className="text-zinc-500">{c.result}</p></div>)}</details>}
   </div>;
 }

@@ -212,9 +212,9 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
   if (report.acks.length) {
     commands = commands.map((c) => {
       const ack = report.acks.find((a) => a.id === c.id);
-      if (!ack || (!projectPending(c) && c.transfer?.phase === "cancelled")) return c;
+      if (!ack || !projectPending(c)) return c;
       commandsChanged = true;
-      return { ...c, status: ack.ok ? ("done" as const) : ("failed" as const), result: ack.result, updatedAt: now.getTime(), transfer: c.transfer ? { ...c.transfer, phase: ack.ok ? "done" as const : "failed" as const, progress: ack.ok ? 100 : c.transfer.progress, logs: [...c.transfer.logs, { seq: -now.getTime(), at: now.getTime(), level: ack.ok ? "info" as const : "error" as const, message: ack.result }].slice(-200) } : undefined };
+      return { ...c, status: ack.ok ? ("done" as const) : ("failed" as const), result: ack.result, updatedAt: now.getTime(), transfer: c.transfer ? { ...c.transfer, phase: ack.ok ? "done" as const : "failed" as const, progress: ack.ok ? 100 : c.transfer.progress, logs: c.transfer.logs.some((entry) => entry.message === ack.result) ? c.transfer.logs : [...c.transfer.logs, { seq: -now.getTime(), at: now.getTime(), level: ack.ok ? "info" as const : "error" as const, message: ack.result }].slice(-200) } : undefined };
     });
   }
   commands = commands.map((c) => {
@@ -520,4 +520,15 @@ export async function retryProjectFile(owner: string, id: string, target: string
   const command = (row?.commands as DeviceCommand[] | undefined)?.find((entry) => entry.id === target && entry.type === "project_install");
   if (!command?.file || !command.transfer || projectPending(command)) throw new Error("Choose the project file again to retry.");
   return queueCommand(owner, id, "project_install", command.arg, "", { name: command.transfer.name, version: command.transfer.version, size: command.transfer.total, file: command.file });
+}
+
+/** Deletes completed project requests/logs; leaves installed projects and pending work intact. */
+export async function clearProjectHistory(owner: string, id: string): Promise<PublicDevice | null> {
+  const row = await mutateDevice(id, (current) => {
+    if (current.owner !== owner) return null;
+    const history = expireProjectCommands(current.commands as DeviceCommand[]);
+    const commands = history.filter((command) => !command.type.startsWith("project_") || projectPending(command) || history.some((stop) => stop.type === "project_stop" && stop.arg === command.id && projectPending(stop)));
+    return { commands: json(commands) };
+  });
+  return row?.owner === owner ? toPublic(row) : null;
 }

@@ -13,7 +13,7 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/devices/[i
   const current = (await listDevices(user.id)).find((d) => d.id === id);
   if (!current) return Response.json({ error: "Device not found." }, { status: 404 });
 
-  if (body.settings?.project !== undefined) {
+  if (body.settings?.project !== undefined && body.settings.project !== current.settings.project) {
     return Response.json({ error: "Load a project package through the project installation command." }, { status: 400 });
   }
 

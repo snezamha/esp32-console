@@ -33,30 +33,9 @@
  */
 void *esp_elf_malloc(uint32_t n, bool exec)
 {
-    uint32_t caps;
-
-#if CONFIG_ELF_LOADER_BUS_ADDRESS_MIRROR
-#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-    caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-#else
-#ifdef MALLOC_CAP_EXEC
-    caps = exec ? MALLOC_CAP_EXEC : MALLOC_CAP_8BIT;
-#else
-    caps = MALLOC_CAP_8BIT | MALLOC_CAP_32BIT;
-#endif
-#endif
-#else
-#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
-    caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-#else
-    caps = MALLOC_CAP_8BIT;
-#endif
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
-    caps |= MALLOC_CAP_CACHE_ALIGNED;
-#endif
-#endif
-
-    return heap_caps_malloc(n, caps);
+    const uint32_t caps = MALLOC_CAP_INTERNAL | (exec ? MALLOC_CAP_EXEC : MALLOC_CAP_8BIT);
+    // IRAM only supports aligned 32-bit data accesses, including the final code word.
+    return heap_caps_malloc(exec ? (n + 3u) & ~3u : n, caps);
 }
 
 /**

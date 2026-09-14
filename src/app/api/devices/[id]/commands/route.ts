@@ -32,6 +32,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
       return updated ? Response.json({ device: updated }) : Response.json({ error: "Device not found." }, { status: 404 });
     }
     case "project_install": {
+      if (body.project !== "none" && device.firmware.localeCompare("1.0.7", undefined, { numeric: true }) < 0) return bad("Update the base firmware to v1.0.7 before loading a project.");
       if (typeof body.retry === "string") {
         try { const updated = await retryProjectFile(user.id, id, body.retry); return Response.json({ device: updated }, { status: 202 }); } catch (error) { return bad(error instanceof Error ? error.message : "Retry failed."); }
       }

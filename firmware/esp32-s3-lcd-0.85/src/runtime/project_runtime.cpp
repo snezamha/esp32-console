@@ -149,7 +149,7 @@ void ProjectRuntime::Begin() {
       s.SetBool("trial", false);
     }
     if (interrupted) {
-      error_ = "Board restarted during project installation (reset " + std::to_string(esp_reset_reason()) + "). Previous project restored.";
+      error_ = "Board restarted during project installation (reset " + std::to_string(esp_reset_reason()) + ", stage " + s.GetString("phase", "unknown") + "). Previous project restored.";
       stage_ = 7; ack_ready_ = true; ack_ok_ = false;
       s.SetString("pending", "");
       Log(error_, true);
@@ -176,8 +176,12 @@ void ProjectRuntime::Begin() {
 
 bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const std::string& id) {
   esp_elf_t candidate{};
-  stage_ = 3; Log("Validating and relocating the project ELF.");
+  { Settings s("project", true); s.SetString("phase", "ELF relocation"); }
+  stage_ = 3; Log("Validating and relocating the project ELF into internal executable memory.");
   if (!mounted_ || !Load(bytes, candidate)) return false;
+  char addresses[96]; snprintf(addresses, sizeof(addresses), "ELF loaded: entry %p, code %p, data %p.", reinterpret_cast<void*>(candidate.entry), candidate.ptext, candidate.pdata);
+  Log(addresses);
+  { Settings s("project", true); s.SetString("phase", "flash write"); }
   const int next_slot = 1 - slot_;
   stage_ = 4; Log("Writing verified file to inactive project flash slot.");
   auto file = LittleFS.open(Path(next_slot).c_str(), "w");
@@ -187,6 +191,7 @@ bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const std::stri
   { Settings s("project", true);
     s.SetString("previous", s.GetString("active", "0|none"));
     s.SetBool("trial", true);
+    s.SetString("phase", "first display frame");
     s.SetString("active", std::to_string(next_slot) + "|" + id);
   }
   if (loaded_) esp_elf_deinit(&elf_);
@@ -214,7 +219,7 @@ std::string ProjectRuntime::Start(const std::string& command_id, const std::stri
   command_id_ = command_id; target_id_ = id; url_ = server + path; insecure_ = insecure; token_ = token;
   if (log_mutex_ && xSemaphoreTake(log_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) { logs_.clear(); next_log_ = 1; xSemaphoreGive(log_mutex_); }
   cancel_ = false; stop_id_.clear(); ack_ready_ = false; received_ = 0; stage_ = 1;
-  { Settings s("project", true); s.SetString("pending", command_id); }
+  { Settings s("project", true); s.SetString("pending", command_id); s.SetString("phase", "download"); }
   Log("Opening project download connection; expected " + std::to_string(expected_size_) + " bytes.");
   error_.clear(); downloaded_.clear(); progress_ = 0; done_ = false; busy_ = true;
   if (xTaskCreatePinnedToCore(DownloadTask, "project_load", 8192, this, 1, nullptr, 0) != pdPASS) {

@@ -29,7 +29,9 @@ export function ConfigureDialog({
     setBusy(true);
     setError(null);
     try {
-      await api(`/api/devices/${device.id}`, "PATCH", { name, ...(changed && { settings }) });
+      const editable = { ...settings };
+      Reflect.deleteProperty(editable, "project");
+      await api(`/api/devices/${device.id}`, "PATCH", { name, ...(changed && { settings: editable }) });
       onClose();
     } catch (err) {
       setError(errorMessage(err));
