@@ -84,25 +84,33 @@ for (const dir of boardDirs) {
     writeFileSync(outFile, image);
     writeFileSync(join(publicDir, board.id, `${version}.app.bin`), app);
 
+    // Only the newest build is kept: older .bin/.app.bin files are removed and the manifest
+    // holds a single version, so the site never offers a stale image.
+    const index = manifest.boards.findIndex((b) => b.id === board.id);
+    for (const old of index >= 0 ? manifest.boards[index].versions : []) {
+      if (old.version === version) continue;
+      rmSync(join(publicDir, board.id, `${old.version}.bin`), { force: true });
+      rmSync(join(publicDir, board.id, `${old.version}.app.bin`), { force: true });
+    }
+
     const meta = { ...board };
     delete meta.fqbn;
-    const index = manifest.boards.findIndex((b) => b.id === board.id);
-    const previous = index >= 0 ? manifest.boards[index].versions : [];
-    const versions = previous
-      .filter((v) => v.version !== version)
-      .concat({
-        version,
-        builtAt: new Date().toISOString(),
-        size: image.length,
-        sha256: createHash("sha256").update(image).digest("hex"),
-        app: {
-          size: app.length,
-          sha256: createHash("sha256").update(app).digest("hex"),
-          md5: createHash("md5").update(app).digest("hex"),
+    const entry = {
+      ...meta,
+      versions: [
+        {
+          version,
+          builtAt: new Date().toISOString(),
+          size: image.length,
+          sha256: createHash("sha256").update(image).digest("hex"),
+          app: {
+            size: app.length,
+            sha256: createHash("sha256").update(app).digest("hex"),
+            md5: createHash("md5").update(app).digest("hex"),
+          },
         },
-      })
-      .sort((a, b) => compareVersions(b.version, a.version));
-    const entry = { ...meta, versions };
+      ],
+    };
     if (index >= 0) manifest.boards[index] = entry;
     else manifest.boards.push(entry);
 
@@ -123,11 +131,3 @@ function trimErasedTail(buffer) {
   return buffer.subarray(0, Math.min(aligned, buffer.length));
 }
 
-function compareVersions(a, b) {
-  const pa = a.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
-  const pb = b.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
-  }
-  return 0;
-}

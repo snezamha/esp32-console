@@ -98,7 +98,7 @@ Feedback: boot splash, charging animation in the battery icon, and optional LED 
 
 | Page | Items |
 | --- | --- |
-| Console | Status, Code, Name, Server, Error, Unlink |
+| Console | Status, Code, Name, Server, Error, Update (while installing), Skip cert check (HTTPS only), Unlink |
 | Display | Theme, Brightness, Auto sleep (10s–5m, Never), Auto off on battery (1–10m, Never), Rotate 180 |
 | Sound & LED | Volume, Button sound, LED ring, LED feedback, LED brightness, LED color |
 | Connectivity | Wi-Fi, Status, Network, IP, Scan, Bluetooth, BT name, Clock, Time zone, Time |
@@ -107,7 +107,7 @@ Feedback: boot splash, charging animation in the battery icon, and optional LED 
 
 Settings are stored in NVS (`src/services/device_config.*`); the web flasher skips that partition, so settings survive updates.
 
-Wi-Fi setup (`src/services/network.*`, `web_portal.*`): with Wi-Fi on and no working network, the board opens an access point named `esp32-s3-lcd-0.85` and shows its address (192.168.4.1) on the home screen. Joining it opens the setup page (captive portal), which scans nearby networks and saves the chosen network and password on the board. After connecting, the home screen shows the board's IP and the access point closes after 30 s; it reopens if the network is lost for 20 s. The page stays available at the board's IP and `http://esp32-s3-lcd-0-85.local`. Bluetooth advertises the same name. Serial alternative: `wifi <ssid> <password>`.
+Wi-Fi setup (`src/services/network.*`, `web_portal.*`): with Wi-Fi on and no working network, the board scans once, then opens an access point named `esp32-s3-lcd-0.85` and shows its address (192.168.4.1) on the home screen. Joining it opens the setup page (captive portal): pick a network, enter its password inline, done. The board has one radio, so — deliberately — it never scans or retries a network on its own while a phone is connected to this access point (either would move the radio off the access point's channel and drop the phone); Rescan needs two taps for the same reason. A failed attempt shows why ("Wrong password", "Network not found"). After connecting, the home screen shows the board's IP and the access point stays up for 90 s so the page can show the result, then closes; it reopens if the network is lost. The page stays available at the board's IP and `http://esp32-s3-lcd-0-85.local`. Bluetooth advertises the same name. Serial alternative: `wifi <ssid> <password>`.
 
 Serial (USB CDC, 115200): `help` lists commands. Every result is a JSON line, e.g. `{"test":"mic","status":"ok","detail":"-66/-65dB",...}`.
 
@@ -123,6 +123,6 @@ Release a new version:
 2. Bump `FIRMWARE_VERSION` in `firmware/<board>/version.h`
 3. Run `pnpm firmware:build`
 
-The script compiles the sketch, writes `public/firmware/<board>/<version>.bin` (merged image, flashed at `0x0`) and adds the version to `firmware/manifest.json`. Older versions stay available in the version picker.
+The script compiles the sketch, writes `public/firmware/<board>/<version>.bin` (merged image, flashed at `0x0`) and `<version>.app.bin` (for over-the-air updates), and updates `firmware/manifest.json`. Only the newest build is kept — the previous version's files are deleted and the manifest holds a single entry per board, so the site only ever offers the latest firmware.
 
 Add a board by creating `firmware/<board>/` with a sketch of the same name, `version.h` and `board.json`.

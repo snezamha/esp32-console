@@ -15,60 +15,15 @@
       ],
       "versions": [
         {
-          "version": "1.9.3",
-          "builtAt": "2026-09-14T17:51:35.554Z",
+          "version": "1.0.0",
+          "builtAt": "2026-09-14T18:02:31.812Z",
           "size": 1945600,
-          "sha256": "97ac0510ccff23052dbaf2563e3419d6790a1a5b25c58f2e7d7fbcf054ab5716",
+          "sha256": "935d17ed102982aeca9dafb90b30f3c6c4d6233147ef2a60680bfaacf7b4cc0a",
           "app": {
             "size": 1877376,
-            "sha256": "8bbb6895f98923108c00aa94244e574a7e0bee9e9180e072da2ae10ea48ba40b",
-            "md5": "218950df34da2a615f5c790769e95011"
+            "sha256": "9bf66a4995f2edfd5ce789969ee5daf0547f29080dbf00076530163b60d76b5b",
+            "md5": "4b1a4fa8ffb3ffd558dc1790f3173e6f"
           }
-        },
-        {
-          "version": "1.9.2",
-          "builtAt": "2026-09-14T17:14:05.349Z",
-          "size": 1941504,
-          "sha256": "fddb5975c7f11f79a01ea919d50c4d012d73345ad690dcc7faaf50d88169b048",
-          "app": {
-            "size": 1875056,
-            "sha256": "b9e11db42dc18cb759bf8b77456c28b475297955c8092fcfe25bdcd748bf90f6",
-            "md5": "1a780bc92e0f7ef1a721033b832077d1"
-          }
-        },
-        {
-          "version": "1.9.1",
-          "builtAt": "2026-09-14T17:05:01.098Z",
-          "size": 1941504,
-          "sha256": "d00ba8f39766d7db54b110cb726fb28451b14aa2aa654230607711e72b29bad7",
-          "app": {
-            "size": 1873968,
-            "sha256": "0696c1e6245ad82dc334e50c5dd7d47e2fa9b5975468bdb2541298c1ee0e7572",
-            "md5": "9883e2727eef771ba00e70da9a385b57"
-          }
-        },
-        {
-          "version": "1.9.0",
-          "builtAt": "2026-09-14T12:03:07.943Z",
-          "size": 1941504,
-          "sha256": "76232bdba6f2259fd457f48ddb894f7b500ec656a96c7b34bf25239915975b74",
-          "app": {
-            "size": 1875408,
-            "sha256": "d67a2e3f757c6b02f0c26e013a17639a66b1d0e8bbbd1ca1e69a1473b0231833",
-            "md5": "31ae61e6590cfbc794b27eeb09712105"
-          }
-        },
-        {
-          "version": "1.8.2",
-          "builtAt": "2026-09-14T11:09:49.606Z",
-          "size": 1851392,
-          "sha256": "e6a974ca1a4eee15ff849c5b9814a0167ac7e257e383743b186a23ba8bc96322"
-        },
-        {
-          "version": "1.7.1",
-          "builtAt": "2026-09-14T10:25:59.555Z",
-          "size": 1732608,
-          "sha256": "40c684dc0db92ec0ca54154f56c83e2cc8091c086f42c52ae33442ca1bc4ae8e"
         }
       ]
     }
