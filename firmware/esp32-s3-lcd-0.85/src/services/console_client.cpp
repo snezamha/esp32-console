@@ -325,21 +325,28 @@ void ConsoleClient::StartPoll(uint32_t now_ms) {
 
 void ConsoleClient::RequestTask(void* arg) {
   auto slot = static_cast<Slot*>(arg);
-  HTTPClient http;
-  WiFiClient plain;
-  WiFiClientSecure secure;
-  if (slot->tls) AttachCertificates(secure, slot->insecure);
-
   int code = -1;
   std::string body;
-  http.setTimeout(slot->timeout_ms);
-  http.setConnectTimeout(10000);
-  const bool begun = slot->tls ? http.begin(secure, slot->url.c_str()) : http.begin(plain, slot->url.c_str());
-  if (begun) {
-    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-    code = http.POST(slot->body.c_str());
-    if (code > 0) body = http.getString().c_str();
-    http.end();
+
+  // Scoped so HTTPClient/WiFiClientSecure/WiFiClient are destroyed (freeing the TLS session's
+  // buffers) before this function returns. vTaskDelete(nullptr) below ends the task without
+  // unwinding the stack — anything still in scope at that point would never be destructed and
+  // its memory never reclaimed, leaking a full TLS session (tens of KB) on every single request.
+  {
+    HTTPClient http;
+    WiFiClient plain;
+    WiFiClientSecure secure;
+    if (slot->tls) AttachCertificates(secure, slot->insecure);
+
+    http.setTimeout(slot->timeout_ms);
+    http.setConnectTimeout(10000);
+    const bool begun = slot->tls ? http.begin(secure, slot->url.c_str()) : http.begin(plain, slot->url.c_str());
+    if (begun) {
+      http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      code = http.POST(slot->body.c_str());
+      if (code > 0) body = http.getString().c_str();
+      http.end();
+    }
   }
 
   slot->code = code;
@@ -497,55 +504,61 @@ void ConsoleClient::StartOta(const Command& command) {
 
 void ConsoleClient::OtaTask(void* arg) {
   auto self = static_cast<ConsoleClient*>(arg);
-  HTTPClient http;
-  WiFiClient plain;
-  WiFiClientSecure secure;
-  const bool tls = self->ota_url_.rfind("https://", 0) == 0;
-  if (tls) AttachCertificates(secure, self->insecure_);
-
   bool ok = false;
   std::string error;
-  http.setTimeout(20000);
-  const bool begun = tls ? http.begin(secure, self->ota_url_.c_str()) : http.begin(plain, self->ota_url_.c_str());
-  const int code = begun ? http.GET() : -1;
-  const int length = code == 200 ? http.getSize() : 0;
 
-  if (code != 200) {
-    error = code > 0 ? "Download failed: HTTP " + std::to_string(code) : "Download failed: no connection";
-  } else if (length <= 0 || (self->ota_size_ && static_cast<size_t>(length) != self->ota_size_)) {
-    error = "Unexpected image size";
-  } else if (!Update.begin(length, U_FLASH)) {
-    error = std::string("Not enough space: ") + Update.errorString();
-  } else {
-    if (!self->ota_md5_.empty()) Update.setMD5(self->ota_md5_.c_str());
-    NetworkClient* stream = http.getStreamPtr();
-    uint8_t buffer[4096];
-    size_t written = 0;
-    uint32_t last_data = millis();
-    while (written < static_cast<size_t>(length)) {
-      const size_t available = stream->available();
-      if (!available) {
-        if (!http.connected() || millis() - last_data > 20000) break;
-        vTaskDelay(pdMS_TO_TICKS(5));
-        continue;
-      }
-      const int read = stream->readBytes(buffer, std::min(available, sizeof(buffer)));
-      if (read <= 0) continue;
-      if (Update.write(buffer, read) != static_cast<size_t>(read)) break;
-      written += read;
-      last_data = millis();
-      self->ota_progress_ = static_cast<int>(written * 100 / length);
-    }
-    if (written != static_cast<size_t>(length)) {
-      error = Update.hasError() ? Update.errorString() : "Download interrupted";
-      Update.abort();
-    } else if (!Update.end()) {
-      error = std::string("Verification failed: ") + Update.errorString();
+  // Scoped for the same reason as RequestTask: vTaskDelete(nullptr) below does not run
+  // destructors, so HTTPClient/WiFiClientSecure/WiFiClient must go out of scope (freeing the
+  // TLS session) before it, or every update leaks one.
+  {
+    HTTPClient http;
+    WiFiClient plain;
+    WiFiClientSecure secure;
+    const bool tls = self->ota_url_.rfind("https://", 0) == 0;
+    if (tls) AttachCertificates(secure, self->insecure_);
+
+    http.setTimeout(20000);
+    const bool begun = tls ? http.begin(secure, self->ota_url_.c_str()) : http.begin(plain, self->ota_url_.c_str());
+    const int code = begun ? http.GET() : -1;
+    const int length = code == 200 ? http.getSize() : 0;
+
+    if (code != 200) {
+      error = code > 0 ? "Download failed: HTTP " + std::to_string(code) : "Download failed: no connection";
+    } else if (length <= 0 || (self->ota_size_ && static_cast<size_t>(length) != self->ota_size_)) {
+      error = "Unexpected image size";
+    } else if (!Update.begin(length, U_FLASH)) {
+      error = std::string("Not enough space: ") + Update.errorString();
     } else {
-      ok = true;
+      if (!self->ota_md5_.empty()) Update.setMD5(self->ota_md5_.c_str());
+      NetworkClient* stream = http.getStreamPtr();
+      uint8_t buffer[4096];
+      size_t written = 0;
+      uint32_t last_data = millis();
+      while (written < static_cast<size_t>(length)) {
+        const size_t available = stream->available();
+        if (!available) {
+          if (!http.connected() || millis() - last_data > 20000) break;
+          vTaskDelay(pdMS_TO_TICKS(5));
+          continue;
+        }
+        const int read = stream->readBytes(buffer, std::min(available, sizeof(buffer)));
+        if (read <= 0) continue;
+        if (Update.write(buffer, read) != static_cast<size_t>(read)) break;
+        written += read;
+        last_data = millis();
+        self->ota_progress_ = static_cast<int>(written * 100 / length);
+      }
+      if (written != static_cast<size_t>(length)) {
+        error = Update.hasError() ? Update.errorString() : "Download interrupted";
+        Update.abort();
+      } else if (!Update.end()) {
+        error = std::string("Verification failed: ") + Update.errorString();
+      } else {
+        ok = true;
+      }
     }
+    http.end();
   }
-  http.end();
 
   self->ota_error_ = error;
   self->ota_ok_ = ok;
