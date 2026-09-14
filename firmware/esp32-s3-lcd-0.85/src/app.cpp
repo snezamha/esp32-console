@@ -1,9 +1,11 @@
 #include "app.h"
 
+#include <esp_system.h>
 #include <sys/time.h>
 
 #include <algorithm>
 #include <ctime>
+#include <cmath>
 #include <sstream>
 #include <vector>
 
@@ -310,6 +312,14 @@ void App::Loop() {
     if (!busy && now - last_input_ >= kMenuAutoCloseMs) menu_.Close();
   }
 
+  if (project_loading_until_) {
+    board.GetDisplay()->Invalidate();
+    if (static_cast<int32_t>(now - project_loading_until_) >= 0) project_loading_until_ = 0;
+  }
+  if (!menu_.IsOpen() && DeviceConfig::Get().project != "none" && now - last_live_redraw_ >= 1000) {
+    last_live_redraw_ = now;
+    board.GetDisplay()->Invalidate();
+  }
   UpdateStatus();
   board.GetDisplay()->Loop();
   delay(5);
@@ -403,6 +413,54 @@ std::string App::HomeSignature() const {
 void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   auto& network = Network::GetInstance();
   const int cx = x + w / 2;
+  const auto& config = DeviceConfig::Get();
+  if (project_loading_until_) {
+    c.TextCentered(cx, y + h / 2 - 12, "Loading project", theme.info);
+    const int progress = 1200 - std::min<uint32_t>(1200, project_loading_until_ - millis());
+    c.FillRoundRect(x + 20, y + h / 2 + 6, w - 40, 4, 2, theme.selected);
+    c.FillRoundRect(x + 20, y + h / 2 + 6, std::max(2, (w - 40) * progress / 1200), 4, 2, theme.info);
+    return;
+  }
+  // Pairing keeps priority so the board remains linkable after removal.
+  const bool pairing = network.State() == Network::WifiState::Setup ||
+      ConsoleClient::GetInstance().GetState() == ConsoleClient::State::Pairing;
+  if (!pairing && config.project == "analog-clock") {
+    if (!network.TimeValid()) {
+      c.TextCentered(cx, y + h / 2, "Syncing time...", theme.muted);
+      return;
+    }
+    const time_t now = time(nullptr);
+    const tm local = *localtime(&now);
+    const int cy = y + h / 2, r = std::min(w, h) / 2 - 7;
+    c.Ring(cx, cy, r, 1, theme.muted);
+    const double pi = 3.141592653589793;
+    for (int i = 0; i < 12; ++i) {
+      const double a = i * pi / 6 - pi / 2;
+      c.Line(cx + cos(a) * (r - 4), cy + sin(a) * (r - 4), cx + cos(a) * (r - 1), cy + sin(a) * (r - 1), 1, theme.text);
+    }
+    auto hand = [&](double units, double length, int thickness, uint16_t color) {
+      const double a = units * pi / 30 - pi / 2;
+      c.Line(cx, cy, cx + cos(a) * length, cy + sin(a) * length, thickness, color);
+    };
+    hand((local.tm_hour % 12) * 5 + local.tm_min / 12.0, r * .5, 3, theme.text);
+    hand(local.tm_min + local.tm_sec / 60.0, r * .75, 2, theme.text);
+    hand(local.tm_sec, r * .82, 1, theme.info);
+    c.FillCircle(cx, cy, 3, theme.info);
+    return;
+  }
+  if (!pairing && config.project == "weather") {
+    const bool stale = weather_updated_at_ && millis() - weather_updated_at_ > 1200000;
+    const auto split = weather_data_.find('|');
+    c.TextCentered(cx, y + 16, "Weather", theme.muted);
+    if (split == std::string::npos) {
+      c.TextCentered(cx, y + h / 2, weather_data_.empty() ? "Loading weather" : "Unavailable", theme.info);
+    } else {
+      c.TextCentered(cx, y + h / 2 - 10, weather_data_.substr(0, split).c_str(), theme.text, 2);
+      c.TextCentered(cx, y + h / 2 + 16, weather_data_.substr(split + 1).c_str(), theme.info);
+      if (stale) c.TextCentered(cx, y + h - 12, "Last known", theme.muted);
+    }
+    return;
+  }
   const int line = Canvas::LineHeight() + 2;
   std::vector<std::pair<std::string, uint16_t>> lines;
 
@@ -1159,6 +1217,7 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
+  body += "&s.project=" + (project_loading_until_ ? previous_project_ : config.project) + "&s.weather_lat=" + std::to_string(config.weather_lat) + "&s.weather_lon=" + std::to_string(config.weather_lon);
   for (size_t pos = 0; (pos = body.find('/', pos)) != std::string::npos;) body.replace(pos, 1, "%2F");
 
   const auto networks = Network::GetInstance().SavedNetworks();
@@ -1187,7 +1246,22 @@ void App::ApplyRemoteSettings(const ConsoleClient::Values& values) {
   for (const auto& [key, value] : values) {
     const int n = atoi(value.c_str());
     const bool on = value == "1";
-    if (key == "volume") {
+    if (key == "project") {
+      if ((value == "none" || value == "weather" || value == "analog-clock") && value != config.project) {
+        previous_project_ = config.project;
+        config.project = value;
+        project_loading_until_ = millis() + 1200;
+        weather_data_.clear();
+        weather_updated_at_ = 0;
+        menu_.Close();
+      }
+    } else if (key == "weather_lat") {
+      config.weather_lat = std::clamp(n, -900000, 900000);
+      weather_data_.clear();
+    } else if (key == "weather_lon") {
+      config.weather_lon = std::clamp(n, -1800000, 1800000);
+      weather_data_.clear();
+    } else if (key == "volume") {
       board.GetAudioCodec()->SetOutputVolume(std::clamp(n, 0, 100));
     } else if (key == "brightness") {
       Settings settings("display");
@@ -1238,7 +1312,12 @@ std::string App::HandleConsoleCommand(const ConsoleClient::Command& command) {
   auto& board = Board::GetInstance();
   auto& network = Network::GetInstance();
 
-  if (command.type == "restart") {
+  if (command.type == "weather_data") {
+    weather_data_ = command.arg;
+    weather_updated_at_ = millis();
+    board.GetDisplay()->Invalidate();
+    return "";
+  } else if (command.type == "restart") {
     Serial.flush();
     delay(150);
     ESP.restart();
@@ -1290,6 +1369,23 @@ void App::Identify() {
 }
 
 namespace {
+// Why the board last started; the ROM's own boot line is lost when USB re-enumerates on reset.
+const char* ResetReasonText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt_watchdog";
+    case ESP_RST_TASK_WDT: return "task_watchdog";
+    case ESP_RST_WDT: return "other_watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    default: return "other";
+  }
+}
+
 // TLS handshakes alone need on the order of 40 KB; below this the console link and web portal
 // silently fail (and stay failing until something frees memory some other way).
 constexpr uint32_t kLowHeapBytes = 32 * 1024;
@@ -1331,7 +1427,7 @@ void App::PrintInfo() {
       "\"flash\":%lu,\"psram\":%lu,\"free_heap\":%lu,\"theme\":\"%s\",\"brightness\":%u,"
       "\"volume\":%d,\"sleep_s\":%d,\"power_off_s\":%d,\"rotate\":%s,\"led_on\":%s,"
       "\"wifi\":\"%s\",\"ip\":\"%s\",\"ble\":%s,\"tz\":\"%s\",\"time\":\"%s\",\"uptime\":%lu,"
-      "\"console\":\"%s\"}\n",
+      "\"console\":\"%s\",\"reset\":\"%s\",\"min_heap\":%lu}\n",
       FIRMWARE_NAME, FIRMWARE_VERSION, board.GetBoardType().c_str(), ESP.getChipModel(),
       ESP.getChipRevision(), ESP.getChipCores(), uint8_t(mac), uint8_t(mac >> 8),
       uint8_t(mac >> 16), uint8_t(mac >> 24), uint8_t(mac >> 32), uint8_t(mac >> 40),
@@ -1341,5 +1437,6 @@ void App::PrintInfo() {
       config.sleep_seconds, config.power_off_seconds, config.rotate ? "true" : "false",
       config.led_on ? "true" : "false", network.WifiStatus().c_str(), network.WifiIp().c_str(),
       config.ble_on ? "true" : "false", config.timezone.c_str(), LocalTime().c_str(), millis() / 1000,
-      ConsoleClient::GetInstance().StateText());
+      ConsoleClient::GetInstance().StateText(), ResetReasonText(),
+      (unsigned long)ESP.getMinFreeHeap());
 }
