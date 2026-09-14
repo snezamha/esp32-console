@@ -50,25 +50,29 @@ void RedirectToPage() {
 
 void HandleStatus() {
   auto& network = Network::GetInstance();
-  char buf[320];
+  char buf[400];
   snprintf(buf, sizeof(buf),
            "{\"device\":\"%s\",\"state\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
-           "\"ap\":%s,\"ap_ip\":\"%s\"}",
+           "\"ap\":%s,\"ap_ip\":\"%s\",\"error\":\"%s\",\"attempt\":%d}",
            JsonEscape(network.DeviceName()).c_str(), network.WifiStatus().c_str(),
            JsonEscape(network.WifiSsid()).c_str(), network.WifiIp().c_str(), network.WifiRssi(),
-           network.AccessPointActive() ? "true" : "false", network.AccessPointIp().c_str());
+           network.AccessPointActive() ? "true" : "false", network.AccessPointIp().c_str(),
+           JsonEscape(network.LastError()).c_str(), network.AttemptId());
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", buf);
 }
 
 void HandleScan() {
   auto& network = Network::GetInstance();
+  // Only on request: a scan moves the radio off the access point's channel, which briefly
+  // disconnects the phone showing this page. Networks were scanned before the access point
+  // started, so the page normally just reads those.
   const bool force = server.hasArg("force");
-  if (!network.IsScanning() && (force || network.ScanAgeMs() > 15000)) network.StartScan();
+  if (force && !network.IsScanning()) network.StartScan();
 
   std::string json = std::string("{\"scanning\":") + (network.IsScanning() ? "true" : "false") +
                      ",\"networks\":[";
-  const auto results = force ? std::vector<WifiNetwork>{} : network.ScanResults();
+  const auto results = network.IsScanning() ? std::vector<WifiNetwork>{} : network.ScanResults();
   for (size_t i = 0; i < results.size(); i++) {
     if (i) json += ",";
     json += "{\"ssid\":\"" + JsonEscape(results[i].ssid) + "\",\"rssi\":" +

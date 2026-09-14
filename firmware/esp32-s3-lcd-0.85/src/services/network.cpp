@@ -12,17 +12,43 @@
 #include "time_zones.h"
 
 namespace {
-// Keep the setup access point this long after connecting, so the page can show the result.
-constexpr uint32_t kApLingerMs = 30000;
-// Reopen the setup access point after losing the network for this long.
-constexpr uint32_t kApReopenMs = 20000;
-// Try the backup network after the main one has been unreachable this long.
-constexpr uint32_t kBackupAfterMs = 15000;
+
+// One attempt at a network before moving on (backup network, then the setup access point).
+constexpr uint32_t kConnectTimeoutMs = 20000;
+// Keep the setup access point this long after joining, so the page can show the result.
+constexpr uint32_t kApLingerMs = 90000;
+// While the setup access point is up and nobody uses it, retry the saved network this often.
+constexpr uint32_t kSetupRetryMs = 120000;
+// Give an attempt this long before trusting a "wrong password" report (the first handshake after
+// a channel change sometimes times out on its own).
+constexpr uint32_t kAuthFailGraceMs = 4000;
+
+// NTP servers by address: a server given by name makes SNTP resolve it in the background, and
+// that pending lookup can run SNTP code on whichever task next uses DNS (an HTTPS request), which
+// trips lwIP's thread-safety check and resets the board.
+constexpr const char* kNtpServer1 = "162.159.200.123";  // time.cloudflare.com
+constexpr const char* kNtpServer2 = "216.239.35.0";     // time.google.com
+
+// Last station disconnect reason (wifi_err_reason_t), set from the Wi-Fi event task.
+std::atomic<int> g_disconnect_reason{0};
+
+bool IsAuthFailure(int reason) {
+  return reason == WIFI_REASON_AUTH_FAIL || reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+         reason == WIFI_REASON_HANDSHAKE_TIMEOUT || reason == WIFI_REASON_MIC_FAILURE;
+}
+
 }  // namespace
 
 void Network::Begin() {
   WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
+  // Reconnecting is done here, one step at a time; the driver's own retries would scan in the
+  // background and pull the radio off the setup access point's channel.
+  WiFi.setAutoReconnect(false);
+  WiFi.onEvent(
+      [](arduino_event_id_t, arduino_event_info_t info) {
+        g_disconnect_reason = info.wifi_sta_disconnected.reason;
+      },
+      ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   Apply();
 }
 
@@ -34,34 +60,82 @@ void Network::Apply() {
 
 void Network::ApplyWifi() {
   auto& config = DeviceConfig::Get();
+  const uint32_t now = millis();
 
   if (!config.wifi_on) {
-    if (wifi_started_) {
-      if (mdns_started_) MDNS.end();
-      mdns_started_ = false;
-      StopAccessPoint();
-      WiFi.disconnect(true);
-      WiFi.mode(WIFI_OFF);
-      wifi_started_ = false;
-    }
+    if (phase_ == Phase::Off) return;
+    if (mdns_started_) MDNS.end();
+    mdns_started_ = false;
+    if (ap_active_) CloseAccessPoint();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    phase_ = Phase::Off;
     return;
   }
 
-  if (!wifi_started_) {
-    WiFi.mode(WIFI_STA);
-    WiFi.setHostname(HostName().c_str());
-    wifi_started_ = true;
-    disconnected_since_ = millis();
-  }
-
+  if (phase_ != Phase::Off) return;  // Already running; settings changes don't restart it.
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(HostName().c_str());
   if (config.wifi_ssid.empty()) {
-    StartAccessPoint();
+    OpenSetup(now);
+  } else {
+    TryNetwork(0, false, now);
+  }
+}
+
+void Network::TryNetwork(int index, bool from_page, uint32_t now_ms) {
+  const auto& config = DeviceConfig::Get();
+  const std::string& ssid = index == 0 ? config.wifi_ssid : config.wifi_ssid2;
+  const std::string& password = index == 0 ? config.wifi_password : config.wifi_password2;
+
+  if (from_page) {
+    attempt_id_++;
+    error_.clear();
+  }
+  network_index_ = index;
+  from_page_ = from_page;
+  g_disconnect_reason = 0;
+
+  WiFi.mode(ap_active_ ? WIFI_AP_STA : WIFI_STA);
+  WiFi.disconnect(false);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  phase_ = Phase::Connecting;
+  phase_since_ = now_ms;
+}
+
+void Network::AttemptFailed(uint32_t now_ms) {
+  StopStation();
+  const auto& config = DeviceConfig::Get();
+  if (!from_page_ && network_index_ == 0 && !config.wifi_ssid2.empty()) {
+    TryNetwork(1, false, now_ms);
     return;
   }
-  using_backup_ = false;
-  if (WiFi.status() != WL_CONNECTED || WiFi.SSID() != config.wifi_ssid.c_str()) {
-    WiFi.begin(config.wifi_ssid.c_str(), config.wifi_password.c_str());
+  OpenSetup(now_ms);
+}
+
+void Network::OpenSetup(uint32_t now_ms) {
+  if (!ap_active_) {
+    // Scan while no phone depends on the radio staying on one channel.
+    ScanNow();
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(DeviceName().c_str());
+    ap_active_ = true;
+    now_ms = millis();  // The scan took a few seconds.
   }
+  phase_ = Phase::Setup;
+  phase_since_ = now_ms;
+}
+
+void Network::StopStation() {
+  WiFi.disconnect(false);
+  // Leaving station mode stops any search that would pull the access point off its channel.
+  WiFi.mode(ap_active_ ? WIFI_AP : WIFI_STA);
+}
+
+void Network::CloseAccessPoint() {
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(phase_ == Phase::Off ? WIFI_OFF : WIFI_STA);
+  ap_active_ = false;
 }
 
 void Network::StartMdns() {
@@ -70,42 +144,64 @@ void Network::StartMdns() {
   if (mdns_started_) MDNS.addService("http", "tcp", 80);
 }
 
-void Network::StartAccessPoint() {
-  if (ap_active_) return;
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(DeviceName().c_str());
-  ap_active_ = true;
-}
-
-void Network::StopAccessPoint() {
-  if (!ap_active_) return;
-  WiFi.softAPdisconnect(true);
-  if (DeviceConfig::Get().wifi_on) WiFi.mode(WIFI_STA);
-  ap_active_ = false;
-}
-
 void Network::Loop(uint32_t now_ms) {
-  auto& config = DeviceConfig::Get();
-  if (!config.wifi_on || !wifi_started_) return;
+  const auto& config = DeviceConfig::Get();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    disconnected_since_ = 0;
-    if (connected_since_ == 0) {
-      connected_since_ = now_ms;
-      StartMdns();  // Needs the station interface to be up
+  switch (phase_) {
+    case Phase::Off:
+      return;
+
+    case Phase::Connecting: {
+      if (WiFi.status() == WL_CONNECTED) {
+        phase_ = Phase::Connected;
+        connected_at_ = now_ms;
+        error_.clear();
+        StartMdns();  // Needs the station interface to be up
+        return;
+      }
+      const int reason = g_disconnect_reason;
+      const uint32_t elapsed = now_ms - phase_since_;
+      if (IsAuthFailure(reason) && elapsed > kAuthFailGraceMs) {
+        error_ = "Wrong password";
+        AttemptFailed(now_ms);
+      } else if (elapsed > kConnectTimeoutMs) {
+        error_ = reason == WIFI_REASON_NO_AP_FOUND ? "Network not found" : "Could not connect";
+        AttemptFailed(now_ms);
+      }
+      return;
     }
-    if (ap_active_ && now_ms - connected_since_ > kApLingerMs) StopAccessPoint();
-  } else {
-    connected_since_ = 0;
-    if (disconnected_since_ == 0) disconnected_since_ = now_ms;
-    if (!using_backup_ && !config.wifi_ssid2.empty() && now_ms - disconnected_since_ > kBackupAfterMs) {
-      using_backup_ = true;
-      WiFi.begin(config.wifi_ssid2.c_str(), config.wifi_password2.c_str());
-    }
-    if (!ap_active_ && (config.wifi_ssid.empty() || now_ms - disconnected_since_ > kApReopenMs)) {
-      StartAccessPoint();
-    }
+
+    case Phase::Connected:
+      if (WiFi.status() != WL_CONNECTED) {
+        if (mdns_started_) MDNS.end();
+        mdns_started_ = false;
+        TryNetwork(0, false, now_ms);
+        return;
+      }
+      if (ap_active_ && now_ms - connected_at_ > kApLingerMs) CloseAccessPoint();
+      return;
+
+    case Phase::Setup:
+      // Retry the saved network now and then, but never while a phone is on the setup page.
+      if (!config.wifi_ssid.empty() && WiFi.softAPgetStationNum() == 0 &&
+          now_ms - phase_since_ > kSetupRetryMs) {
+        TryNetwork(0, false, now_ms);
+      }
+      return;
   }
+}
+
+void Network::Connect(const std::string& ssid, const std::string& password) {
+  auto& config = DeviceConfig::Get();
+  config.wifi_ssid = ssid;
+  config.wifi_password = password;
+  config.wifi_on = true;
+  config.Save();
+  if (phase_ == Phase::Off) {
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(HostName().c_str());
+  }
+  TryNetwork(0, true, millis());
 }
 
 void Network::SetBackup(const std::string& ssid, const std::string& password) {
@@ -120,28 +216,11 @@ void Network::ForgetBackup() {
   config.wifi_ssid2.clear();
   config.wifi_password2.clear();
   config.Save();
-  if (using_backup_) {
-    using_backup_ = false;
-    disconnected_since_ = millis();
-    WiFi.disconnect(false);
-  }
 }
 
 std::vector<std::string> Network::SavedNetworks() const {
-  auto& config = DeviceConfig::Get();
+  const auto& config = DeviceConfig::Get();
   return {config.wifi_ssid, config.wifi_ssid2};
-}
-
-void Network::Connect(const std::string& ssid, const std::string& password) {
-  auto& config = DeviceConfig::Get();
-  config.wifi_ssid = ssid;
-  config.wifi_password = password;
-  config.wifi_on = true;
-  config.Save();
-  connected_since_ = 0;
-  using_backup_ = false;
-  WiFi.disconnect(false);
-  ApplyWifi();  // Starts connecting with the new credentials
 }
 
 void Network::ApplyBle() {
@@ -162,15 +241,18 @@ void Network::ApplyBle() {
 
 void Network::ApplyTimezone() {
   const auto& tz = FindTimeZone(DeviceConfig::Get().timezone.c_str());
-  configTzTime(tz.posix, "pool.ntp.org", "time.google.com");
+  configTzTime(tz.posix, kNtpServer1, kNtpServer2);
 }
 
 Network::WifiState Network::State() const {
-  auto& config = DeviceConfig::Get();
-  if (!config.wifi_on) return WifiState::Off;
-  if (WiFi.status() == WL_CONNECTED) return WifiState::Connected;
-  if (config.wifi_ssid.empty()) return WifiState::Setup;
-  return WifiState::Connecting;
+  switch (phase_) {
+    case Phase::Off: return WifiState::Off;
+    case Phase::Setup: return WifiState::Setup;
+    case Phase::Connected:
+      return WiFi.status() == WL_CONNECTED ? WifiState::Connected : WifiState::Connecting;
+    case Phase::Connecting: return WifiState::Connecting;
+  }
+  return WifiState::Off;
 }
 
 std::string Network::WifiStatus() const {
@@ -183,7 +265,11 @@ std::string Network::WifiStatus() const {
   return "Off";
 }
 
-std::string Network::WifiSsid() const { return DeviceConfig::Get().wifi_ssid; }
+std::string Network::WifiSsid() const {
+  if (State() == WifiState::Connected) return WiFi.SSID().c_str();
+  const auto& config = DeviceConfig::Get();
+  return network_index_ == 1 ? config.wifi_ssid2 : config.wifi_ssid;
+}
 
 std::string Network::WifiIp() const {
   return WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "-";
@@ -193,6 +279,14 @@ int Network::WifiRssi() const { return WiFi.status() == WL_CONNECTED ? WiFi.RSSI
 
 std::string Network::AccessPointIp() const { return WiFi.softAPIP().toString().c_str(); }
 
+void Network::ScanNow() {
+  std::vector<WifiNetwork> networks;
+  Wireless::ScanWifi(networks);
+  std::lock_guard<std::mutex> lock(mutex_);
+  scan_results_ = networks;
+  scanned_at_ = millis();
+}
+
 void Network::StartScan() {
   if (scanning_) return;
   scanning_ = true;
@@ -201,13 +295,7 @@ void Network::StartScan() {
 
 void Network::ScanTask(void* arg) {
   auto self = static_cast<Network*>(arg);
-  std::vector<WifiNetwork> networks;
-  Wireless::ScanWifi(networks);
-  {
-    std::lock_guard<std::mutex> lock(self->mutex_);
-    self->scan_results_ = networks;
-    self->scanned_at_ = millis();
-  }
+  self->ScanNow();
   self->scanning_ = false;
   vTaskDelete(nullptr);
 }

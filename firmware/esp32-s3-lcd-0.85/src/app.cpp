@@ -1035,20 +1035,19 @@ void App::HandleCommand(const std::string& line) {
     ring->Show();
     ok();
   } else if (cmd == "wifi") {
-    if (args.size() >= 2 && args[1] == "off") {
-      config.wifi_on = false;
-    } else if (args.size() >= 2 && args[1] == "on") {
-      config.wifi_on = true;
+    // Plain `wifi` only reports; it must not disturb a connection in progress.
+    if (args.size() >= 2 && (args[1] == "off" || args[1] == "on")) {
+      config.wifi_on = args[1] == "on";
+      config.Save();
+      network.Apply();
     } else if (args.size() >= 2) {
       // wifi <ssid> [password]; the SSID cannot contain spaces here (use the setup page).
       network.Connect(args[1], args.size() >= 3 ? Rest(line, 2) : "");
     }
-    config.Save();
-    network.Apply();
     display->UpdateStatusBar();
-    Serial.printf("{\"wifi\":{\"on\":%s,\"ssid\":\"%s\",\"status\":\"%s\",\"ip\":\"%s\"}}\n",
+    Serial.printf("{\"wifi\":{\"on\":%s,\"ssid\":\"%s\",\"status\":\"%s\",\"ip\":\"%s\",\"error\":\"%s\"}}\n",
                   config.wifi_on ? "true" : "false", config.wifi_ssid.c_str(),
-                  network.WifiStatus().c_str(), network.WifiIp().c_str());
+                  network.WifiStatus().c_str(), network.WifiIp().c_str(), network.LastError().c_str());
   } else if (cmd == "console") {
     auto& console = ConsoleClient::GetInstance();
     if (args.size() >= 2 && args[1] == "unlink") {

@@ -4,8 +4,8 @@
 
 // Wi-Fi setup web page on port 80.
 //   GET  /             setup page
-//   GET  /api/status   {"device","state","ssid","ip","rssi","ap","ap_ip"}
-//   GET  /api/scan     {"scanning",networks:[{"ssid","rssi","secure"}]}  (starts a scan if stale)
+//   GET  /api/status   {"device","state","ssid","ip","rssi","ap","ap_ip","error","attempt"}
+//   GET  /api/scan     {"scanning",networks:[{"ssid","rssi","secure"}]}  (?force=1 rescans)
 //   POST /api/wifi     form fields ssid, password; saves and connects
 // While the setup access point is up, DNS answers every name with the board, so phones
 // open the page automatically (captive portal).
