@@ -3,26 +3,26 @@
     {
       "id": "analog-clock",
       "name": "Analog clock",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "A live clock using the board’s configured time zone.",
       "board": "esp32-s3-lcd-0.85",
       "abi": 1,
-      "path": "/projects/esp32-s3-lcd-0.85/analog-clock/1.0.0.elf",
-      "size": 1572,
-      "md5": "a04b5ba6e440e505a838b1c94faba2d3",
-      "sha256": "fa3654dac290742904f0d5044680b22df7e2dbd5e53708a81ba82d76b487b0cf"
+      "path": "/projects/esp32-s3-lcd-0.85/analog-clock/1.0.1.elf",
+      "size": 1796,
+      "md5": "37636f7b2600ce12cb522a4133394ae4",
+      "sha256": "a33c333280be81e19ffca8b05580bb85d5fa775df250ce59b86fc9d230ba9e09"
     },
     {
       "id": "weather",
       "name": "Weather",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Current temperature and conditions for your chosen location.",
       "board": "esp32-s3-lcd-0.85",
       "abi": 1,
-      "path": "/projects/esp32-s3-lcd-0.85/weather/1.0.0.elf",
-      "size": 1128,
-      "md5": "3b710d7cbef5939ea9b8c6523936630a",
-      "sha256": "bd89fd986f48af9eb9943d45c2a46e60f1a5d488f229036988991988b491929d"
+      "path": "/projects/esp32-s3-lcd-0.85/weather/1.0.1.elf",
+      "size": 1340,
+      "md5": "3a4c38631d9e2fadc123c533121a9038",
+      "sha256": "af5cedd61341b6a2416b4a00bb92a4d7e8f5b749606da87487d66c90bba01fd0"
     }
   ]
 }

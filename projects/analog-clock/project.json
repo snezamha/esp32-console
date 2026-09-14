@@ -1,1 +1,6 @@
-{"id":"analog-clock","name":"Analog clock","version":"1.0.0","description":"A live clock using the board’s configured time zone."}
+{
+  "id": "analog-clock",
+  "name": "Analog clock",
+  "version": "1.0.1",
+  "description": "A live clock using the board\u2019s configured time zone."
+}

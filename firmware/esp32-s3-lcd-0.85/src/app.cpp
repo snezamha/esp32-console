@@ -289,6 +289,7 @@ void App::Loop() {
   Network::GetInstance().Loop(now);
   WebPortal::GetInstance().Loop(now);
   ConsoleClient::GetInstance().Loop(now);
+  if (ProjectRuntime::Get().Busy()) { menu_.Close(); board.WakeUp(); }
   UpdatePowerHold(now);
   CheckHeap(now);
 
@@ -388,7 +389,7 @@ void App::DrawOverlay(Canvas& c, int w, int h, const Theme& theme) {
 
 void App::OnClockTick() {
   auto& board = Board::GetInstance();
-  board.OnClockTick(menu_.IsOpen() || HwTest::GetInstance().IsBusy());
+  board.OnClockTick(menu_.IsOpen() || HwTest::GetInstance().IsBusy() || ProjectRuntime::Get().Busy() || ConsoleClient::GetInstance().OtaProgress() >= 0);
 
   // Redraw the home screen when its network details change.
   const std::string signature = HomeSignature();
@@ -1182,7 +1183,7 @@ std::string App::ReportTelemetry() {
   char buf[96];
   snprintf(buf, sizeof(buf), "battery=%d&charging=%s&heap=%lu&uptime=%lu", battery,
            charging ? "1" : "0", (unsigned long)ESP.getFreeHeap(), millis() / 1000);
-  return buf;
+  return std::string(buf) + "&reset_reason=" + std::to_string(esp_reset_reason());
 }
 
 void App::ApplyRemoteSettings(const ConsoleClient::Values& values) {
@@ -1323,7 +1324,7 @@ constexpr uint32_t kLowHeapGraceMs = 5 * 60 * 1000;
 }  // namespace
 
 void App::CheckHeap(uint32_t now) {
-  if (ConsoleClient::GetInstance().OtaProgress() >= 0) {
+  if (ConsoleClient::GetInstance().OtaProgress() >= 0 || ProjectRuntime::Get().Busy()) {
     low_heap_since_ = 0;  // Never interrupt an update.
     return;
   }

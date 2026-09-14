@@ -131,12 +131,16 @@ Add a board by creating `firmware/<board>/` with a sketch of the same name, `ver
 
 Projects are **independent native Xtensa ELF binaries**, uploaded into the board’s flash filesystem. Their implementations live in `projects/weather/main.c` and `projects/analog-clock/main.c`, outside the base firmware. The base firmware contains only the generic Espressif ELF loader and the versioned display API (`src/runtime/project_api.h`). Project binaries are never linked into the firmware.
 
-Update the base firmware to **v1.0.4 or later** once, then use the **Projects** tab to upload Weather or Analog clock. The board downloads the selected file, checks its size and MD5, writes it into an inactive project slot, and activates it after successful loading. The previous project stays installed if download, validation or writing fails. Only one module executes at a time. **Default display** unloads the active project. Installing a project does not replace the base firmware or require a restart.
+Update the base firmware to **v1.0.5 or later** once, then use the **Projects** tab to upload Weather or Analog clock. The board downloads the selected file, checks its size and MD5, writes it into an inactive project slot, and activates it after a successful first display frame. The previous project stays installed if download, validation or writing fails. Only one module executes at a time. **Default display** unloads the active project. Installing a project does not replace the base firmware or require a restart.
 
-- **Weather:** temperature and conditions from [Open-Meteo](https://open-meteo.com/), cached for 10 minutes. Coordinates are stored in the console (Berlin by default). Wi-Fi and the console connection are needed for new readings.
-- **Analog clock:** synchronized board time and the configured time zone.
+- **Weather:** temperature and conditions from [Open-Meteo](https://open-meteo.com/), cached for 10 minutes. Coordinates and Celsius/Fahrenheit preferences are stored in the console (Berlin by default). Wi-Fi and the console connection are needed for new readings.
+- **Analog clock:** synchronized board time, time-zone selection and an optional second hand.
 
 All module drawing is clipped below the status bar. The base provides marquee text, drawing primitives, time, and generic project data through the C ABI. The device menu remains available. The selected project and uploaded files survive restart and base firmware updates. The project filesystem occupies the existing `spiffs` partition at `0x670000` (1.5 MB); the web flasher preserves it alongside NVS. No database migration is required.
+
+The project manager shows real board download progress and timestamped connection, checksum, flash and activation logs. Requests can be stopped and retried; uploaded files can be retried without choosing them again. Offline requests expire after 10 minutes, and delivered transfers without progress expire after 2 minutes. Downloads have connection and transfer timeouts. The board stays awake during installation; a restart during the first trial restores the previous project instead of repeatedly starting the failed module. On older firmware, stopping a delivered transfer restarts the board.
+
+Each downloadable project is **one self-describing `.elf` file**, including its name, version, board and ABI in a `.project` section. Download it from the catalog or choose a compatible local file in **Upload a project file** (128 KB maximum). Local files are validated and stored privately in the console; only the authenticated board can download them. The catalog manifest and source `project.json` are build inputs, not companion files needed for installation. Live UI monitoring runs only while an installation or stop request is pending.
 
 Build projects independently:
 
@@ -144,8 +148,8 @@ Build projects independently:
 pnpm projects:build
 ```
 
-This writes separate `.elf` files into `public/projects/<board>/<project>/<version>.elf` and updates `projects/manifest.json`. It uses the installed ESP32-S3 Arduino compiler; set `PROJECT_CC` to `xtensa-esp32s3-elf-gcc` on other setups. New projects implement `app_main(int argc, char **argv)` using the shared `ProjectFrame` ABI and provide a `project.json` manifest. Modules must have no unresolved imports and return after each frame.
+This writes separate `.elf` files into `public/projects/<board>/<project>/<version>.elf` and updates `projects/manifest.json`. It uses the installed ESP32-S3 Arduino compiler; set `PROJECT_CC` to `xtensa-esp32s3-elf-gcc` on other setups. New projects implement `app_main(int argc, char **argv)` using the shared `ProjectFrame` ABI and provide a `project.json` manifest. Modules must have no unresolved imports and return after each frame. Run `pnpm projects:test` for standalone-file and transfer-state checks.
 
-Build the generic base separately with `pnpm firmware:build`. Firmware v1.0.4 retains automatic right-to-left marquee for overflowing text, with pauses at both ends; long notifications stay visible for a full pass.
+Build the generic base separately with `pnpm firmware:build`. Firmware v1.0.5 retains automatic right-to-left marquee for overflowing text, with pauses at both ends; long notifications stay visible for a full pass.
 
 The loader is vendored from [Espressif’s ELF loader](https://github.com/espressif/esp-iot-solution/tree/6958385313b0e4fc1f3de259b1d677fca7d7d236/components/elf_loader), with pinned provenance and Apache-2.0 license under `src/runtime/elf_loader/`.

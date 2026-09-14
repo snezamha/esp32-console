@@ -1,3 +1,4 @@
+import type { ProjectTransfer } from "@/lib/project-transfers";
 import type { DeviceSettings } from "@/lib/device-settings";
 
 /**
@@ -10,12 +11,15 @@ import type { DeviceSettings } from "@/lib/device-settings";
  *   wifi_add            arg: `ssid=<ssid>&password=<password>` (saved as the backup network)
  *   wifi_forget         forget the backup network
  */
-export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test" | "ota" | "wifi_add" | "wifi_forget" | "project_install";
+export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test" | "ota" | "wifi_add" | "wifi_forget" | "project_install" | "project_stop";
 
 export type DeviceCommand = {
   id: string;
   type: CommandType;
   arg: string;
+  transfer?: ProjectTransfer;
+  /** Server-only uploaded file; stripped from public responses. */
+  file?: string;
   /** queued → sent (delivered, waiting for the board's ack) → done | failed */
   status: "queued" | "sent" | "done" | "failed";
   result: string;

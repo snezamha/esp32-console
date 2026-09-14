@@ -1,3 +1,4 @@
+import { expireProjectCommands, projectPending, type ProjectTransfer } from "@/lib/project-transfers";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { Device as DeviceRow, Pairing as PairingRow, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
@@ -22,7 +23,7 @@ const MAX_COMMANDS = 20;
 /** How often a held request re-checks the database while waiting for a change. */
 const POLL_INTERVAL_MS = 800;
 /** Commands the board confirms with an explicit ack; the rest are done once delivered. */
-const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install"];
+const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install", "project_stop"];
 
 type PendingEdits = Partial<Record<keyof DeviceSettings, { value: DeviceSettings[keyof DeviceSettings]; rev: number }>>;
 const json = (value: unknown) => value as Prisma.InputJsonValue;
@@ -58,7 +59,7 @@ function toPublic(row: DeviceRow): PublicDevice {
     activeProject: (row.reported as DeviceSettings).project ?? "none",
     projectSupported: row.board === "esp32-s3-lcd-0.85" && (row.reported as Record<string, unknown>)._project_api === 1,
     settingsReported: row.settingsReported,
-    commands: (row.commands as DeviceCommand[]).slice(-10),
+    commands: expireProjectCommands(row.commands as DeviceCommand[]).slice(-10).map((entry) => { const command = { ...entry }; delete command.file; return command; }),
     tests: row.tests as Record<string, TestResult>,
     testsUpdatedAt: row.testsUpdatedAt?.getTime() ?? 0,
     samples: row.samples as DeviceSample[],
@@ -126,6 +127,9 @@ export type BoardReport = {
   ota: Pick<OtaStatus, "state" | "progress" | "error"> | null;
   networks: string[] | null;
   acks: { id: string; ok: boolean; result: string }[];
+  projectStatus: { id: string; phase: ProjectTransfer["phase"]; progress: number; bytes: number; total: number } | null;
+  projectLogs: { id: string; seq: number; level: "info" | "error"; message: string }[];
+  resetReason: string;
   unlink: boolean;
 };
 
@@ -161,6 +165,8 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     data.reported = json({ ...settings,
       weather_lat: (row.reported as DeviceSettings).weather_lat ?? DEFAULT_SETTINGS.weather_lat,
       weather_lon: (row.reported as DeviceSettings).weather_lon ?? DEFAULT_SETTINGS.weather_lon,
+      weather_unit: (row.reported as DeviceSettings).weather_unit ?? "celsius",
+      project_seconds: (row.reported as DeviceSettings).project_seconds ?? true,
       _project_api: report.projectSupported ? 1 : 0,
     });
     data.settingsReported = true;
@@ -177,14 +183,38 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     data.ota = json(ota);
   }
 
-  let commands = row.commands as DeviceCommand[];
-  let commandsChanged = false;
+  let commands = expireProjectCommands(row.commands as DeviceCommand[], now.getTime());
+  let commandsChanged = commands.some((command, index) => command !== (row.commands as DeviceCommand[])[index]);
+  commands = commands.map((command) => {
+    if (command.type !== "project_install") return command;
+    if (!projectPending(command)) {
+      if (command.transfer?.phase !== "cancelled") return command;
+      const fresh = report.projectLogs.filter((log) => log.id === command.id && !command.transfer!.logs.some((entry) => entry.seq === log.seq)).map((log) => ({ seq: log.seq, level: log.level, message: log.message, at: now.getTime() }));
+      const stop = commands.find((entry) => entry.type === "project_stop" && entry.arg === command.id);
+      const ack = stop && report.acks.find((entry) => entry.id === stop.id);
+      if (ack && projectPending(stop)) fresh.push({ seq: -now.getTime(), level: ack.ok ? "info" : "error", message: ack.result, at: now.getTime() });
+      if (!fresh.length) return command;
+      commandsChanged = true;
+      return { ...command, transfer: { ...command.transfer, logs: [...command.transfer.logs, ...fresh].slice(-200) } };
+    }
+    const logs = report.projectLogs.filter((log) => log.id === command.id);
+    const status = report.projectStatus?.id === command.id ? report.projectStatus : null;
+    const base = command.transfer ?? { phase: command.status, progress: 0, bytes: 0, total: 0, logs: [], name: "Project", version: "" };
+    if (!status && !logs.length && !(command.status === "sent" && report.uptime < row.uptime)) return command;
+    commandsChanged = true;
+    if (command.status === "sent" && report.uptime < row.uptime && !report.acks.some((ack) => ack.id === command.id)) {
+      const result = `Board restarted during installation (${report.resetReason || "unknown reset reason"}). Retry the project upload.`;
+      return { ...command, status: "failed" as const, result, updatedAt: now.getTime(), transfer: { ...base, phase: "failed" as const, logs: [...base.logs, { seq: -now.getTime(), at: now.getTime(), level: "error" as const, message: result }] } };
+    }
+    const fresh = logs.filter((log) => !base.logs.some((entry) => entry.seq === log.seq)).map((log) => ({ seq: log.seq, level: log.level, message: log.message, at: now.getTime() }));
+    return { ...command, updatedAt: now.getTime(), transfer: { ...base, ...(status ? { phase: status.phase, progress: status.progress, bytes: status.bytes, total: status.total } : {}), logs: [...base.logs, ...fresh].slice(-200) } };
+  });
   if (report.acks.length) {
     commands = commands.map((c) => {
       const ack = report.acks.find((a) => a.id === c.id);
-      if (!ack) return c;
+      if (!ack || (!projectPending(c) && c.transfer?.phase === "cancelled")) return c;
       commandsChanged = true;
-      return { ...c, status: ack.ok ? ("done" as const) : ("failed" as const), result: ack.result, updatedAt: now.getTime() };
+      return { ...c, status: ack.ok ? ("done" as const) : ("failed" as const), result: ack.result, updatedAt: now.getTime(), transfer: c.transfer ? { ...c.transfer, phase: ack.ok ? "done" as const : "failed" as const, progress: ack.ok ? 100 : c.transfer.progress, logs: [...c.transfer.logs, { seq: -now.getTime(), at: now.getTime(), level: ack.ok ? "info" as const : "error" as const, message: ack.result }].slice(-200) } : undefined };
     });
   }
   commands = commands.map((c) => {
@@ -216,7 +246,7 @@ function pickDelivery(row: DeviceRow): Delivery {
   const updated = source.map((c) => {
     if (c.status !== "queued") return c;
     toDeliver.push(c);
-    return { ...c, status: ACKED_COMMANDS.includes(c.type) ? ("sent" as const) : ("done" as const), updatedAt: Date.now() };
+    return { ...c, status: ACKED_COMMANDS.includes(c.type) ? ("sent" as const) : ("done" as const), updatedAt: Date.now(), transfer: c.transfer ? { ...c.transfer, phase: "sent" as const, logs: [...c.transfer.logs, { seq: -Date.now(), at: Date.now(), level: "info" as const, message: "Board accepted the installation request." }] } : undefined };
   });
 
   return { settings: settings as Partial<DeviceSettings>, commands: toDeliver, data: toDeliver.length ? { commands: json(updated) } : null };
@@ -374,7 +404,7 @@ export async function updateDevice(
       let changed = false;
       for (const key of Object.keys(patch.settings) as (keyof DeviceSettings)[]) {
         if (patch.settings[key] === currentSettings[key]) continue;
-        if (key === "weather_lat" || key === "weather_lon") {
+        if (key === "weather_lat" || key === "weather_lon" || key === "weather_unit" || key === "project_seconds") {
           const reported = { ...(data.reported as object ?? current.reported as object), [key]: patch.settings[key] };
           data.reported = json(reported);
           continue;
@@ -398,6 +428,7 @@ export async function queueCommand(
   type: CommandType,
   arg: string,
   otaVersion = "",
+  project?: { name: string; version: string; size: number; file?: string },
 ): Promise<PublicDevice | null> {
   const owned = await db.device.findFirst({ where: { id, owner }, select: { id: true } });
   if (!owned) return null;
@@ -405,16 +436,24 @@ export async function queueCommand(
 
   const row = await mutateDevice(id, (current) => {
     if (current.owner !== owner) return null;
-    let commands = current.commands as DeviceCommand[];
+    let commands = expireProjectCommands(current.commands as DeviceCommand[]);
     if ((type === "project_install" || type === "ota") && commands.some((c) =>
-      (c.type === "project_install" || c.type === "ota") && c.status === "sent")) {
+      ((c.type === "project_install" || c.type === "ota") && c.status === "sent") || (c.type === "project_stop" && projectPending(c)))) {
       throw new Error("An installation is already running.");
     }
     // A newer command of the same kind replaces one that has not been delivered yet.
     commands = commands.filter((c) => !(c.status === "queued" && c.type === type));
+    const commandId = randomBytes(4).toString("hex");
+    if (project?.file) {
+      const values = new URLSearchParams(arg);
+      values.set("path", `/api/devices/${id}/projects/${commandId}/file`);
+      arg = values.toString();
+    }
     commands = [
       ...commands,
-      { id: randomBytes(4).toString("hex"), type, arg, status: "queued" as const, result: "", createdAt: now, updatedAt: now },
+      { id: commandId, type, arg, status: "queued" as const, result: "", createdAt: now, updatedAt: now,
+        ...(type === "project_install" ? { transfer: { phase: "queued" as const, progress: 0, bytes: 0, total: project?.size ?? 0, name: project?.name ?? "Default display", version: project?.version ?? "", logs: [{ seq: -now, at: now, level: "info" as const, message: "Installation requested. Waiting for the board to accept the file." }] }, ...(project?.file ? { file: project.file } : {}) } : {}),
+      },
     ].slice(-MAX_COMMANDS);
     const data: Prisma.DeviceUpdateInput = { commands: json(commands) };
     if (type === "ota") {
@@ -454,4 +493,31 @@ export async function weatherSettingsForBoard(token: string): Promise<DeviceSett
   if (!token) return null;
   const row = await db.device.findUnique({ where: { token } });
   return row ? effectiveSettings(row) : null;
+}
+
+export async function stopProject(owner: string, id: string, target: string): Promise<PublicDevice | null> {
+  const row = await mutateDevice(id, (current) => {
+    if (current.owner !== owner) return null;
+    const commands = expireProjectCommands(current.commands as DeviceCommand[]);
+    const command = commands.find((entry) => entry.id === target && entry.type === "project_install");
+    if (!command || !projectPending(command)) return null;
+    const now = Date.now();
+    const updated = commands.map((entry) => entry.id !== target ? entry : { ...entry, status: "failed" as const, result: "Cancelled by user", updatedAt: now, transfer: entry.transfer ? { ...entry.transfer, phase: "cancelled" as const, logs: [...entry.transfer.logs, { seq: -now, at: now, level: "info" as const, message: entry.status === "queued" ? "Queued request cancelled." : "Stop requested. Waiting for the board to stop the transfer." }] } : undefined });
+    if (command.status === "sent") updated.push({ id: randomBytes(4).toString("hex"), type: current.firmware.localeCompare("1.0.5", undefined, { numeric: true }) >= 0 ? "project_stop" : "restart", arg: target, status: "queued", result: "", createdAt: now, updatedAt: now });
+    return { commands: json(updated.slice(-MAX_COMMANDS)) };
+  });
+  return row?.owner === owner ? toPublic(row) : null;
+}
+
+export async function projectFileForBoard(id: string, commandId: string, token: string): Promise<Buffer | null> {
+  const row = await db.device.findFirst({ where: { id, token } });
+  const command = (row?.commands as DeviceCommand[] | undefined)?.find((command) => command.id === commandId && command.type === "project_install");
+  return command?.file ? Buffer.from(command.file, "base64") : null;
+}
+
+export async function retryProjectFile(owner: string, id: string, target: string): Promise<PublicDevice | null> {
+  const row = await db.device.findFirst({ where: { id, owner } });
+  const command = (row?.commands as DeviceCommand[] | undefined)?.find((entry) => entry.id === target && entry.type === "project_install");
+  if (!command?.file || !command.transfer || projectPending(command)) throw new Error("Choose the project file again to retry.");
+  return queueCommand(owner, id, "project_install", command.arg, "", { name: command.transfer.name, version: command.transfer.version, size: command.transfer.total, file: command.file });
 }

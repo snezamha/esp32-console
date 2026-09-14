@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, formatSettingValue, sanitizeSettings } from "@/lib/device-settings";
 import { syncBoard, weatherSettingsForBoard, type SyncResult } from "@/lib/device-store";
 import { weatherPayload } from "@/lib/weather";
+import type { ProjectPhase } from "@/lib/project-transfers";
 import type { TestResult } from "@/lib/device-types";
 
 // Bounded to stay under Vercel's default (Hobby-plan) 10 s function limit; raise both this and
@@ -73,6 +74,12 @@ export async function POST(request: Request) {
     })
     .filter((ack) => ack.id);
 
+  const [projectId, projectPhase, projectProgress, projectBytes, projectTotal] = field("p.status", 160).split("|");
+  const phases = ["connecting", "downloading", "verifying", "writing", "activating", "done", "failed", "cancelled"];
+  const projectLogs = form.getAll("p.log").slice(-40).map(String).map((line) => {
+    const [id, seq, level, ...message] = line.split("|");
+    return { id: id.slice(0, 16), seq: parseInt(seq, 10), level: level === "error" ? "error" as const : "info" as const, message: message.join("|").slice(0, 240) };
+  }).filter((log) => log.id && Number.isFinite(log.seq));
   const report = {
     secret: field("secret").toLowerCase(),
     token: field("token"),
@@ -89,6 +96,9 @@ export async function POST(request: Request) {
     rev: int("rev", 0),
     settings: Object.keys(reported).length ? sanitizeSettings(reported, DEFAULT_SETTINGS) : null,
     projectSupported: field("project_api") === "1",
+    projectStatus: projectId && phases.includes(projectPhase) ? { id: projectId, phase: projectPhase as ProjectPhase, progress: Math.min(100, Math.max(0, parseInt(projectProgress, 10) || 0)), bytes: Math.max(0, parseInt(projectBytes, 10) || 0), total: Math.max(0, parseInt(projectTotal, 10) || 0) } : null,
+    projectLogs,
+    resetReason: field("reset_reason"),
     tests,
     ota: OTA_STATES.includes(otaState)
       ? {
@@ -102,12 +112,16 @@ export async function POST(request: Request) {
     unlink: field("unlink") === "1",
   };
 
-  const waitS = Math.min(report.settings?.project === "weather" ? 4 : MAX_WAIT_S, Math.max(0, int("wait", 0)));
+  const waitS = Math.min(report.projectStatus && !["done", "failed", "cancelled"].includes(report.projectStatus.phase) ? 0 : report.settings?.project === "weather" ? 4 : MAX_WAIT_S, Math.max(0, int("wait", 0)));
   const result = await syncBoard(report, waitS * 1000, request.signal);
   if (request.signal.aborted) return reply([], 499);
   const lines = render(result);
   if (result.status === "linked" && report.settings) {
     const settings = { ...report.settings, ...result.settings };
+    if (settings.project === "analog-clock") {
+      const device = await weatherSettingsForBoard(report.token);
+      if (device) lines.push(`project_data=${device.project_seconds ? "1" : "0"}`);
+    }
     if (settings.project === "weather") {
       const budget = Math.max(1, Math.min(4000, 8500 - (Date.now() - startedAt)));
       // Coordinates are console-side project configuration, not base firmware settings.

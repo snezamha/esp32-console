@@ -1,1 +1,6 @@
-{"id":"weather","name":"Weather","version":"1.0.0","description":"Current temperature and conditions for your chosen location."}
+{
+  "id": "weather",
+  "name": "Weather",
+  "version": "1.0.1",
+  "description": "Current temperature and conditions for your chosen location."
+}

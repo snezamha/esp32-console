@@ -217,8 +217,7 @@ std::string ConsoleClient::ServerHost() const {
 // Requests
 
 void ConsoleClient::Loop(uint32_t now_ms) {
-  const auto project_ack = ProjectRuntime::Get().Loop();
-  if (!project_ack.empty()) { acks_.push_back(project_ack); Changed(); }
+  for (const auto& project_ack : ProjectRuntime::Get().Loop()) { acks_.push_back(project_ack); Changed(); }
   if (poll_.done) {
     poll_.done = false;
     const bool ok = poll_.code == 200;
@@ -280,6 +279,7 @@ std::string ConsoleClient::CommonFields() {
     body += "&ota=" + ota_state_ + UrlEncode("|" + std::to_string(ota_progress_.load()) + "|" + ota_error_);
     ota_reported_progress_ = ota_progress_;
   }
+  body += ProjectRuntime::Get().Report();
   return body;
 }
 
@@ -474,8 +474,13 @@ void ConsoleClient::HandleCommand(const Command& command) {
   if (seen_commands_.size() > kSeenCommands) seen_commands_.erase(seen_commands_.begin());
 
   Serial.printf("{\"console\":\"command\",\"type\":\"%s\"}\n", command.type.c_str());
+  if (command.type == "project_stop") {
+    const auto result = ProjectRuntime::Get().Cancel(command.id, command.arg);
+    if (!result.empty()) acks_.push_back(command.id + "|" + result);
+    Changed(); return;
+  }
   if (command.type == "project_install") {
-    const auto result = ota_active_ ? "fail|Firmware update is running" : ProjectRuntime::Get().Start(command.id, command.arg, server_, insecure_);
+    const auto result = ota_active_ ? "fail|Firmware update is running" : ProjectRuntime::Get().Start(command.id, command.arg, server_, insecure_, token_);
     if (!result.empty()) acks_.push_back(command.id + "|" + result);
     Changed(); return;
   }

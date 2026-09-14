@@ -7,6 +7,9 @@ import { AuthCard } from "@/components/AuthCard";
 import { Select } from "@/components/Select";
 import { ErrorText, accentButton, cardClass, inputClass } from "@/components/ui";
 import { api, deviceName, isOtaActive } from "@/lib/device-client";
+import { TIME_ZONES } from "@/lib/device-settings";
+import { inspectProject } from "@/lib/project-file";
+import { projectPending } from "@/lib/project-transfers";
 import type { PublicDevice } from "@/lib/device-types";
 import { DISPLAY_PROJECTS } from "@/lib/projects";
 import { errorMessage } from "@/lib/esp";
@@ -21,8 +24,7 @@ export function Projects({ active }: { active: boolean }) {
   const updates = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const installing = devices?.some((device) => {
-    const command = device.commands.findLast((command) => command.type === "project_install");
-    return command?.status === "queued" || command?.status === "sent";
+    return device.commands.some((command) => command.type.startsWith("project_") && projectPending(command));
   }) ?? false;
 
   // Fetch a snapshot when entering the tab; an idle Projects tab needs no live connection.
@@ -90,42 +92,96 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
   const [error, setError] = useState<string | null>(null);
   const [lat, setLat] = useState(String(device.settings.weather_lat / 10000));
   const [lon, setLon] = useState(String(device.settings.weather_lon / 10000));
+  const [unit, setUnit] = useState(device.settings.weather_unit);
+  const [seconds, setSeconds] = useState(device.settings.project_seconds);
+  const [timezone, setTimezone] = useState(String(device.settings.tz));
+  const [file, setFile] = useState<File | null>(null);
+  const [fileName, setFileName] = useState("");
+  const [upload, setUpload] = useState<number | null>(null);
+  const xhr = useRef<XMLHttpRequest | null>(null);
   const installation = device.commands.findLast((command) => command.type === "project_install");
-  const loading = busy || installation?.status === "queued" || installation?.status === "sent";
-  const installError = installation?.status === "failed" ? installation.result : null;
-  const disabled = loading || !device.projectSupported || isOtaActive(device.ota);
-  const install = async (project: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const latitude = Number(lat), longitude = Number(lon);
-      if (project === "weather" && (!lat.trim() || !lon.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180)) throw new Error("Enter valid latitude (−90 to 90) and longitude (−180 to 180).");
-      const body = project === "weather" ? { type: "project_install", project, latitude: Math.round(latitude * 10000), longitude: Math.round(longitude * 10000) } : { type: "project_install", project };
-      const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}/commands`, "POST", body);
-      onUpdated(result.device);
-    } catch (err) { setError(errorMessage(err)); }
-    finally { setBusy(false); }
+  const stopping = device.commands.some((command) => command.type === "project_stop" && projectPending(command));
+  const loading = projectPending(installation);
+  const disabled = busy || loading || stopping || !device.projectSupported || isOtaActive(device.ota);
+  const modern = device.firmware.localeCompare("1.0.5", undefined, { numeric: true }) >= 0;
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true); setError(null);
+    try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   };
-  return <div className="space-y-3">
-    {!device.projectSupported && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Update the board to base firmware v1.0.4 or later in Devices → Details → Firmware, then wait for it to reconnect.</p>}
-    {loading && <div role="status" aria-live="polite" className="rounded-xl bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-950 dark:text-blue-300"><span className="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />{device.online ? "Loading project on the board…" : "Waiting for the board to come online…"}</div>}
-    <ErrorText>{error || installError}</ErrorText>
-    {PROJECTS.map((project) => {
-      const current = device.activeProject === project.id;
-      const unavailable = "board" in project && project.board !== device.board;
-      const locationChanged = project.id === "weather" && (Math.round(Number(lat) * 10000) !== device.settings.weather_lat || Math.round(Number(lon) * 10000) !== device.settings.weather_lon);
-      return <section key={project.id} className={cardClass + " space-y-3 p-4"}>
-        <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">{project.name}</h3>{current && <span className="text-xs font-medium text-emerald-600">Active</span>}</div>
-        <p className="text-xs text-zinc-500">{project.description}</p>
-        {project.id === "weather" && <>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="space-y-1 text-xs text-zinc-500">Latitude<input type="number" min="-90" max="90" step="0.0001" value={lat} onChange={(e) => setLat(e.target.value)} disabled={disabled} className={inputClass} /></label>
-            <label className="space-y-1 text-xs text-zinc-500">Longitude<input type="number" min="-180" max="180" step="0.0001" value={lon} onChange={(e) => setLon(e.target.value)} disabled={disabled} className={inputClass} /></label>
-          </div>
-          <p className="text-xs text-zinc-500">Default: Berlin. Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline">Open-Meteo</a>.</p>
-        </>}
-        <Button disabled={disabled || unavailable || (current && !locationChanged)} onClick={() => install(project.id)} className={accentButton + " h-10 w-full"}>{current ? locationChanged ? "Update location" : "Active project" : project.id === "none" ? "Restore default" : "Load project"}</Button>
-      </section>;
-    })}
+  const command = async (body: object) => {
+    const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}/commands`, "POST", body);
+    onUpdated(result.device);
+  };
+  const save = async () => {
+    const latitude = Number(lat), longitude = Number(lon);
+    if (!lat.trim() || !lon.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) throw new Error("Enter valid latitude and longitude.");
+    const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}`, "PATCH", { settings: { weather_lat: Math.round(latitude * 10000), weather_lon: Math.round(longitude * 10000), weather_unit: unit, project_seconds: seconds, tz: timezone } });
+    onUpdated(result.device);
+  };
+  const install = (project: string) => run(async () => {
+    await save();
+    await command({ type: "project_install", project, latitude: Math.round(Number(lat) * 10000), longitude: Math.round(Number(lon) * 10000) });
+  });
+  const uploadFile = () => run(async () => {
+    if (!file) throw new Error("Choose a project file.");
+    await new Promise<void>((resolve, reject) => {
+      const request = new XMLHttpRequest(); xhr.current = request;
+      request.open("POST", `/api/devices/${device.id}/projects`); request.timeout = 30_000;
+      request.upload.onprogress = (event) => { if (event.lengthComputable) setUpload(Math.round(event.loaded * 100 / event.total)); };
+      request.onload = () => {
+        try { const result = JSON.parse(request.responseText); if (request.status >= 400) reject(new Error(result.error || "Upload failed.")); else { onUpdated(result.device); resolve(); } } catch { reject(new Error("Upload failed.")); }
+      };
+      request.onerror = () => reject(new Error("Upload connection failed. Retry."));
+      request.ontimeout = () => reject(new Error("Upload timed out. Retry."));
+      request.onabort = () => reject(new Error("File upload cancelled."));
+      const form = new FormData(); form.set("file", file); setUpload(0); request.send(form);
+    }).finally(() => { setUpload(null); xhr.current = null; });
+  });
+  const transfer = installation?.transfer;
+  const logs = transfer?.logs ?? (installation ? [{ seq: 0, at: installation.createdAt, level: "info", message: "Installation requested." }, { seq: 1, at: installation.updatedAt, level: installation.status === "failed" ? "error" : "info", message: installation.result || (installation.status === "queued" ? "Waiting for board. Request expires after 10 minutes." : "Request delivered. Update to firmware 1.0.5 for detailed board logs.") }] : []);
+  const logEnd = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { logEnd.current?.scrollIntoView({ block: "nearest" }); }, [logs.length]);
+  return <div className="space-y-4">
+    {!modern && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Install base firmware v1.0.5 in Devices → Details → Firmware for live logs, safe stopping and protection from automatic shutdown during installation.</p>}
+    <section className={cardClass + " flex items-center justify-between gap-3 p-4"}><div><p className="text-xs text-zinc-500">Active on display</p><p className="mt-1 text-sm font-semibold">{PROJECTS.find((p) => p.id === device.activeProject)?.name ?? device.activeProject}</p></div><span className={device.online ? "text-xs text-emerald-600" : "text-xs text-zinc-500"}>{device.online ? "Board online" : "Board offline"}</span></section>
+    <ErrorText>{error}</ErrorText>
+    {installation && <section className={cardClass + " space-y-3 p-4"}>
+      <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Installation · {transfer?.name ?? new URLSearchParams(installation.arg).get("id")}</h3><span className="text-xs capitalize">{transfer?.phase ?? installation.status}</span></div>
+      <progress aria-label="Board download progress" value={transfer?.progress ?? 0} max={100} className="h-2 w-full accent-blue-600" />
+      <p className="text-xs text-zinc-500">{transfer ? `${transfer.progress}% · ${transfer.bytes.toLocaleString()} / ${transfer.total.toLocaleString()} bytes${transfer.version ? ` · v${transfer.version}` : ""}` : "Waiting for installation report"}</p>
+      {loading && !modern && <p className="text-xs text-amber-600">Stopping on this older firmware restarts the board to interrupt its download.</p>}
+      {loading && !device.online && <p role="status" className="text-xs text-amber-600">Board offline. Reconnect its power and Wi-Fi. You can cancel this request; waiting is limited.</p>}
+      <div role="log" aria-label="Installation logs" aria-live="polite" className="max-h-64 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{logs.map((log) => <p key={log.seq} className={log.level === "error" ? "text-red-400" : ""}>{new Date(log.at).toLocaleTimeString()} · {log.message}</p>)}<div ref={logEnd} /></div>
+      <ErrorText>{installation.status === "failed" && transfer?.phase !== "cancelled" ? installation.result : null}</ErrorText>
+      <div className="flex gap-2">
+        {loading && <Button disabled={busy} onClick={() => run(() => command({ type: "project_stop", command: installation.id }))} className={accentButton + " h-9 px-4"}>Stop installation</Button>}
+        {!loading && installation.status === "failed" && <Button disabled={disabled} onClick={() => {
+          const id = new URLSearchParams(installation.arg).get("id") ?? "none";
+          if (!new URLSearchParams(installation.arg).get("path")?.startsWith("/api/devices/") && PROJECTS.some((p) => p.id === id)) install(id);
+          else run(async () => { await command({ type: "project_install", retry: installation.id }); });
+        }} className={accentButton + " h-9 px-4"}>Retry</Button>}
+        <Button disabled={busy} onClick={() => run(async () => { const result = await api<{ devices: PublicDevice[] }>("/api/devices"); const current = result.devices.find((d) => d.id === device.id); if (current) onUpdated(current); })} className="h-9 px-3 text-xs text-zinc-500">Refresh status</Button>
+      </div>
+      {stopping && <p role="status" className="text-xs text-amber-600">Stop requested; waiting for board confirmation before another installation.</p>}
+    </section>}
+    <div className="grid gap-3 sm:grid-cols-2">{DISPLAY_PROJECTS.map((project) => <section key={project.id} className={cardClass + " flex flex-col gap-3 p-4"}>
+      <div className="flex justify-between"><h3 className="text-sm font-semibold">{project.name}</h3>{device.activeProject === project.id && <span className="text-xs text-emerald-600">Active</span>}</div>
+      <p className="text-xs text-zinc-500">{project.description}</p><p className="text-xs text-zinc-500">v{project.version} · {(project.size / 1024).toFixed(1)} KB · Single project file</p>
+      <a href={project.path} download className="text-xs text-blue-600 underline">Download project file</a>
+      <Button disabled={disabled || project.board !== device.board} onClick={() => install(project.id)} className={accentButton + " mt-auto h-10 w-full"}>{device.activeProject === project.id ? "Reinstall project" : "Load project"}</Button>
+    </section>)}</div>
+    <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Project settings</h3>
+      <p className="text-xs text-zinc-500">Save settings independently of installation. Applied when the board next connects.</p>
+      <fieldset className="space-y-3"><legend className="text-xs font-medium">Weather · location and units</legend>
+        <select aria-label="City preset" defaultValue="custom" className={inputClass} onChange={(e) => { if (e.target.value !== "custom") { const [a,b] = e.target.value.split(","); setLat(a); setLon(b); } }}><option value="custom">Choose a city / custom coordinates</option><option value="52.52,13.405">Berlin</option><option value="35.6892,51.389">Tehran</option><option value="51.5074,-0.1278">London</option><option value="40.7128,-74.006">New York</option></select>
+        <div className="grid grid-cols-2 gap-2"><label className="text-xs">Latitude<input type="number" min="-90" max="90" step="0.0001" value={lat} onChange={(e) => setLat(e.target.value)} className={inputClass} /></label><label className="text-xs">Longitude<input type="number" min="-180" max="180" step="0.0001" value={lon} onChange={(e) => setLon(e.target.value)} className={inputClass} /></label></div>
+        <select aria-label="Temperature unit" value={unit} onChange={(e) => setUnit(e.target.value as typeof unit)} className={inputClass}><option value="celsius">Celsius · °C</option><option value="fahrenheit">Fahrenheit · °F</option></select>
+      </fieldset>
+      <fieldset className="space-y-2"><legend className="text-xs font-medium">Analog clock</legend><label className="block text-xs">Time zone<select value={timezone} onChange={(e) => setTimezone(e.target.value)} className={inputClass}>{TIME_ZONES.map((zone) => <option key={zone.id} value={zone.id}>{zone.label}</option>)}</select></label><label className="flex gap-2 text-xs"><input type="checkbox" checked={seconds} onChange={(e) => setSeconds(e.target.checked)} />Show second hand (clock v1.0.1+)</label></fieldset>
+      <Button disabled={busy || loading} onClick={() => run(save)} className={accentButton + " h-10 px-4"}>Save settings</Button>
+    </section>
+    <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Upload a project file</h3><p className="text-xs text-zinc-500">Choose one .elf file containing its project identity. No companion files are needed. Maximum 128 KB.</p><input aria-label="Project file" type="file" accept=".elf" disabled={busy} className="w-full text-xs" onChange={async (e) => { const selected = e.target.files?.[0]; setFile(null); setFileName(""); setError(null); if (!selected) return; try { const meta = inspectProject(new Uint8Array(await selected.arrayBuffer())); setFile(selected); setFileName(`${meta.name} · v${meta.version} · ${selected.size.toLocaleString()} bytes`); } catch (err) { setError(errorMessage(err)); } }} />{fileName && <p className="text-xs text-zinc-500">{fileName}</p>}{upload !== null && <div role="status" className="text-xs">Uploading to console: {upload}%<progress value={upload} max={100} className="w-full" /><Button onClick={() => xhr.current?.abort()} className="mt-2 underline">Stop upload</Button></div>}<Button disabled={disabled || !modern || !file} onClick={uploadFile} className={accentButton + " h-10 px-4"}>Upload and load</Button></section>
+    <Button disabled={disabled || device.activeProject === "none"} onClick={() => install("none")} className="h-10 w-full rounded-xl border border-zinc-300 text-xs">Unload project · restore default display</Button>
+    {device.commands.filter((c) => c.type === "project_install").length > 1 && <details className={cardClass + " p-4"}><summary className="cursor-pointer text-xs">Installation history</summary>{device.commands.filter((c) => c.type === "project_install" && c.id !== installation?.id).reverse().map((c) => <div key={c.id} className="mt-3 text-xs"><p>{new Date(c.createdAt).toLocaleString()} · {c.transfer?.name ?? new URLSearchParams(c.arg).get("id")} · {c.transfer?.phase ?? c.status}</p><p className="text-zinc-500">{c.result}</p></div>)}</details>}
   </div>;
 }

@@ -17,7 +17,7 @@ int app_main(int argc, char **argv) {
   }
   hand(f, cx, cy, (f->hour % 12) * 5 + f->minute * .083333333f, r * .5f, 3, f->text);
   hand(f, cx, cy, f->minute + f->second * .016666667f, r * .75f, 2, f->text);
-  hand(f, cx, cy, f->second, r * .82f, 1, f->accent);
+  if (f->data[0][0] != '0') hand(f, cx, cy, f->second, r * .82f, 1, f->accent);
   f->circle(f->canvas, cx, cy, 3, f->accent);
   return 0;
 }

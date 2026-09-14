@@ -1,5 +1,3 @@
-import { DISPLAY_PROJECTS } from "@/lib/projects";
-
 /**
  * Board settings that the console can change. Keys match the `set.<key>=<value>` lines
  * the firmware understands (firmware/<board>/src/services/console_client.cpp).
@@ -8,6 +6,8 @@ export type DeviceSettings = {
   project: string;
   weather_lat: number;
   weather_lon: number;
+  weather_unit: "celsius" | "fahrenheit";
+  project_seconds: boolean;
   volume: number;
   brightness: number;
   theme: "dark" | "light";
@@ -29,6 +29,8 @@ export const DEFAULT_SETTINGS: DeviceSettings = {
   project: "none",
   weather_lat: 525200,
   weather_lon: 134050,
+  weather_unit: "celsius",
+  project_seconds: true,
   volume: 70,
   brightness: 100,
   theme: "dark",
@@ -94,7 +96,9 @@ export function sanitizeSettings(input: Record<string, unknown>, base: DeviceSet
     if (input[key] !== undefined && options.includes(value)) out[key] = value;
   };
 
-  if (input.project === "none" || DISPLAY_PROJECTS.some((project) => project.id === input.project)) out.project = String(input.project);
+  if (typeof input.project === "string" && /^[a-z0-9][a-z0-9-]{0,47}$/.test(input.project)) out.project = input.project;
+  if (input.weather_unit === "celsius" || input.weather_unit === "fahrenheit") out.weather_unit = input.weather_unit;
+  bool("project_seconds");
   num("weather_lat", -900000, 900000);
   num("weather_lon", -1800000, 1800000);
   num("volume", 0, 100);

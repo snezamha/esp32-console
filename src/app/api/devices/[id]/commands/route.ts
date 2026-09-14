@@ -1,6 +1,6 @@
 import { getUser, unauthorized } from "@/lib/auth";
 import { BOARDS } from "@/lib/boards";
-import { listDevices, queueCommand, updateDevice } from "@/lib/device-store";
+import { listDevices, queueCommand, updateDevice, stopProject, retryProjectFile } from "@/lib/device-store";
 import { projectPackage } from "@/lib/projects";
 import { isOtaActive } from "@/lib/device-client";
 import type { CommandType } from "@/lib/device-types";
@@ -23,9 +23,18 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
   const type = body?.type as CommandType;
   let arg = "";
   let otaVersion = "";
+  let projectInfo: { name: string; version: string; size: number } | undefined;
 
   switch (type) {
+    case "project_stop": {
+      if (typeof body.command !== "string") return bad("Choose an installation to stop.");
+      const updated = await stopProject(user.id, id, body.command);
+      return updated ? Response.json({ device: updated }) : Response.json({ error: "Device not found." }, { status: 404 });
+    }
     case "project_install": {
+      if (typeof body.retry === "string") {
+        try { const updated = await retryProjectFile(user.id, id, body.retry); return Response.json({ device: updated }, { status: 202 }); } catch (error) { return bad(error instanceof Error ? error.message : "Retry failed."); }
+      }
       if (!device.projectSupported) return bad("Update the base firmware to v1.0.4 or later.");
       if (isOtaActive(device.ota) || device.commands.some((c) => c.type === "project_install" && c.status === "sent")) return bad("An installation is already running.");
       if (body.project === "none") { arg = new URLSearchParams({ id: "none" }).toString(); break; }
@@ -35,6 +44,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
         if (!Number.isInteger(body.latitude) || !Number.isInteger(body.longitude) || Math.abs(body.latitude) > 900000 || Math.abs(body.longitude) > 1800000) return bad("Enter valid latitude and longitude.");
         await updateDevice(user.id, id, { settings: { ...device.settings, weather_lat: body.latitude, weather_lon: body.longitude } });
       }
+      projectInfo = { name: project.name, version: project.version, size: project.size };
       arg = new URLSearchParams({ id: project.id, path: project.path, abi: String(project.abi), size: String(project.size), md5: project.md5 }).toString();
       break;
     }
@@ -80,7 +90,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
   }
 
   let updated;
-  try { updated = await queueCommand(user.id, id, type, arg, otaVersion); }
+  try { updated = await queueCommand(user.id, id, type, arg, otaVersion, projectInfo); }
   catch (error) {
     if (error instanceof Error && error.message === "An installation is already running.") return Response.json({ error: error.message }, { status: 409 });
     throw error;

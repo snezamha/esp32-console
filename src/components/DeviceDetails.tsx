@@ -355,6 +355,7 @@ function FirmwarePanel({
 
 const COMMAND_LABELS: Record<DeviceCommand["type"], string> = {
   project_install: "Project installation",
+  project_stop: "Stop project installation",
   restart: "Restart",
   poweroff: "Power off",
   identify: "Identify",
