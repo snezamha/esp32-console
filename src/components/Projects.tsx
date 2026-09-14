@@ -1,8 +1,9 @@
 "use client";
 
-import { Button } from "@headlessui/react";
+import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
 import { useSession } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
+import { WeatherProjectSettings } from "@/components/WeatherProjectSettings";
 import { AuthCard } from "@/components/AuthCard";
 import { Select } from "@/components/Select";
 import { ErrorText, accentButton, cardClass, inputClass } from "@/components/ui";
@@ -89,6 +90,8 @@ export function Projects({ active }: { active: boolean }) {
 
 function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated: (device: PublicDevice) => void }) {
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState(Math.max(0, PROJECTS.findIndex((p) => p.id === device.activeProject)));
+  const [saved, setSaved] = useState<{ project: string; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lat, setLat] = useState(String(device.settings.weather_lat / 10000));
   const [lon, setLon] = useState(String(device.settings.weather_lon / 10000));
@@ -99,27 +102,27 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
   const [fileName, setFileName] = useState("");
   const [upload, setUpload] = useState<number | null>(null);
   const xhr = useRef<XMLHttpRequest | null>(null);
-  const installation = device.commands.findLast((command) => command.type === "project_install");
+  const installation = device.commands.findLast((command) => command.type === "project_install" && (tab < PROJECTS.length ? new URLSearchParams(command.arg).get("id") === PROJECTS[tab].id : new URLSearchParams(command.arg).get("path")?.startsWith("/api/devices/")));
   const stopping = device.commands.some((command) => command.type === "project_stop" && projectPending(command));
-  const loading = projectPending(installation);
+  const loading = device.commands.some((command) => command.type === "project_install" && projectPending(command));
   const disabled = busy || loading || stopping || !device.projectSupported || isOtaActive(device.ota);
   const modern = device.firmware.localeCompare("1.0.8", undefined, { numeric: true }) >= 0;
   const run = async (action: () => Promise<void>) => {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setSaved(null);
     try { await action(); } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   };
   const command = async (body: object) => {
     const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}/commands`, "POST", body);
     onUpdated(result.device);
   };
-  const save = async () => {
+  const save = async (project: string) => {
     const latitude = Number(lat), longitude = Number(lon);
-    if (!lat.trim() || !lon.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) throw new Error("Enter valid latitude and longitude.");
-    const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}`, "PATCH", { settings: { weather_lat: Math.round(latitude * 10000), weather_lon: Math.round(longitude * 10000), weather_unit: unit, project_seconds: seconds, tz: timezone } });
-    onUpdated(result.device);
+    if (project === "weather" && (!lat.trim() || !lon.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180)) throw new Error("Enter valid latitude and longitude.");
+    const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}`, "PATCH", { settings: project === "weather" ? { weather_lat: Math.round(latitude * 10000), weather_lon: Math.round(longitude * 10000), weather_unit: unit } : { project_seconds: seconds, tz: timezone } });
+    onUpdated(result.device); setSaved({ project, message: "Settings saved. Applied when the board connects." });
   };
   const install = (project: string) => run(async () => {
-    if (project !== "none") await save();
+    if (project !== "none") await save(project);
     await command({ type: "project_install", project, latitude: Math.round(Number(lat) * 10000), longitude: Math.round(Number(lon) * 10000) });
   });
   const uploadFile = () => run(async () => {
@@ -145,6 +148,7 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
     {!modern && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">Install base firmware v1.0.8 in Devices → Details → Firmware before loading a project. It uses internal executable memory and preserves installation diagnostics across a restart.</p>}
     <section className={cardClass + " flex items-center justify-between gap-3 p-4"}><div><p className="text-xs text-zinc-500">Active on display</p><p className="mt-1 text-sm font-semibold">{PROJECTS.find((p) => p.id === device.activeProject)?.name ?? device.activeProject}</p></div><span className={device.online ? "text-xs text-emerald-600" : "text-xs text-zinc-500"}>{device.online ? "Board online" : "Board offline"}</span></section>
     <ErrorText>{error}</ErrorText>
+    {loading && !projectPending(installation) && <Button className="text-xs text-blue-600 underline" onClick={() => { const pending = device.commands.findLast((c) => c.type === "project_install" && projectPending(c)); const id = new URLSearchParams(pending?.arg).get("id"); const index = PROJECTS.findIndex((p) => p.id === id); setTab(index < 0 ? PROJECTS.length : index); }}>Another project is installing · open its log and controls</Button>}
     {installation && <section className={cardClass + " space-y-3 p-4"}>
       <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Installation · {transfer?.name ?? new URLSearchParams(installation.arg).get("id")}</h3><span className="text-xs capitalize">{transfer?.phase ?? installation.status}</span></div>
       <progress aria-label="Board download progress" value={transfer?.progress ?? 0} max={100} className="h-2 w-full accent-blue-600" />
@@ -154,8 +158,8 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
       <div role="log" aria-label="Installation logs" aria-live="polite" className="max-h-64 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{logs.map((log) => <p key={log.seq} className={log.level === "error" ? "text-red-400" : ""}>{new Date(log.at).toLocaleTimeString()} · {log.message}</p>)}<div ref={logEnd} /></div>
       <ErrorText>{installation.status === "failed" && transfer?.phase !== "cancelled" ? installation.result : null}</ErrorText>
       <div className="flex gap-2">
-        {loading && <Button disabled={busy} onClick={() => run(() => command({ type: "project_stop", command: installation.id }))} className={accentButton + " h-9 px-4"}>Stop installation</Button>}
-        {!loading && installation.status === "failed" && <Button disabled={disabled} onClick={() => {
+        {projectPending(installation) && <Button disabled={busy} onClick={() => run(() => command({ type: "project_stop", command: installation.id }))} className={accentButton + " h-9 px-4"}>Stop installation</Button>}
+        {!projectPending(installation) && installation.status === "failed" && <Button disabled={disabled} onClick={() => {
           const id = new URLSearchParams(installation.arg).get("id") ?? "none";
           if (!new URLSearchParams(installation.arg).get("path")?.startsWith("/api/devices/") && PROJECTS.some((p) => p.id === id)) install(id);
           else run(async () => { await command({ type: "project_install", retry: installation.id }); });
@@ -164,28 +168,39 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
       </div>
       {stopping && <p role="status" className="text-xs text-amber-600">Stop requested; waiting for board confirmation before another installation.</p>}
     </section>}
-    <div className="grid gap-3 sm:grid-cols-2">{DISPLAY_PROJECTS.map((project) => <section key={project.id} className={cardClass + " flex flex-col gap-3 p-4"}>
-      <div className="flex justify-between"><h3 className="text-sm font-semibold">{project.name}</h3>{device.activeProject === project.id && <span className="text-xs text-emerald-600">Active</span>}</div>
-      <p className="text-xs text-zinc-500">{project.description}</p><p className="text-xs text-zinc-500">v{project.version} · {(project.size / 1024).toFixed(1)} KB · Single project file</p>
-      <a href={project.path} download className="text-xs text-blue-600 underline">Download project file</a>
-      <Button disabled={disabled || !modern || project.board !== device.board} onClick={() => install(project.id)} className={accentButton + " mt-auto h-10 w-full"}>{device.activeProject === project.id ? "Reinstall project" : "Load project"}</Button>
-    </section>)}<section className={cardClass + " flex flex-col gap-3 p-4"}>
-      <div className="flex justify-between"><h3 className="text-sm font-semibold">Default display</h3>{device.activeProject === "none" && <span className="text-xs text-emerald-600">Active</span>}</div>
-      <p className="text-xs text-zinc-500">Return the board to the original firmware display. Unloads the current project while keeping board settings.</p>
-      <Button disabled={disabled || device.activeProject === "none"} onClick={() => install("none")} className={accentButton + " mt-auto h-10 w-full"}>{device.activeProject === "none" ? "Active project" : "Load default display"}</Button>
-    </section></div>
-    <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Project settings</h3>
-      <p className="text-xs text-zinc-500">Save settings independently of installation. Applied when the board next connects.</p>
-      <fieldset className="space-y-3"><legend className="text-xs font-medium">Weather · location and units</legend>
-        <select aria-label="City preset" defaultValue="custom" className={inputClass} onChange={(e) => { if (e.target.value !== "custom") { const [a,b] = e.target.value.split(","); setLat(a); setLon(b); } }}><option value="custom">Choose a city / custom coordinates</option><option value="52.52,13.405">Berlin</option><option value="35.6892,51.389">Tehran</option><option value="51.5074,-0.1278">London</option><option value="40.7128,-74.006">New York</option></select>
-        <div className="grid grid-cols-2 gap-2"><label className="text-xs">Latitude<input type="number" min="-90" max="90" step="0.0001" value={lat} onChange={(e) => setLat(e.target.value)} className={inputClass} /></label><label className="text-xs">Longitude<input type="number" min="-180" max="180" step="0.0001" value={lon} onChange={(e) => setLon(e.target.value)} className={inputClass} /></label></div>
-        <select aria-label="Temperature unit" value={unit} onChange={(e) => setUnit(e.target.value as typeof unit)} className={inputClass}><option value="celsius">Celsius · °C</option><option value="fahrenheit">Fahrenheit · °F</option></select>
-      </fieldset>
-      <fieldset className="space-y-2"><legend className="text-xs font-medium">Analog clock</legend><label className="block text-xs">Time zone<select value={timezone} onChange={(e) => setTimezone(e.target.value)} className={inputClass}>{TIME_ZONES.map((zone) => <option key={zone.id} value={zone.id}>{zone.label}</option>)}</select></label><label className="flex gap-2 text-xs"><input type="checkbox" checked={seconds} onChange={(e) => setSeconds(e.target.checked)} />Show second hand (clock v1.0.1+)</label></fieldset>
-      <Button disabled={busy || loading} onClick={() => run(save)} className={accentButton + " h-10 px-4"}>Save settings</Button>
-    </section>
-    <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Upload a project file</h3><p className="text-xs text-zinc-500">Choose one .elf file containing its project identity. No companion files are needed. Maximum 128 KB.</p><input aria-label="Project file" type="file" accept=".elf" disabled={busy} className="w-full text-xs" onChange={async (e) => { const selected = e.target.files?.[0]; setFile(null); setFileName(""); setError(null); if (!selected) return; try { const meta = inspectProject(new Uint8Array(await selected.arrayBuffer())); setFile(selected); setFileName(`${meta.name} · v${meta.version} · ${selected.size.toLocaleString()} bytes`); } catch (err) { setError(errorMessage(err)); } }} />{fileName && <p className="text-xs text-zinc-500">{fileName}</p>}{upload !== null && <div role="status" className="text-xs">Uploading to console: {upload}%<progress value={upload} max={100} className="w-full" /><Button onClick={() => xhr.current?.abort()} className="mt-2 underline">Stop upload</Button></div>}<Button disabled={disabled || !modern || !file} onClick={uploadFile} className={accentButton + " h-10 px-4"}>Upload and load</Button></section>
-    {device.commands.some((c) => c.type.startsWith("project_") && !projectPending(c)) && <Button disabled={busy} onClick={() => run(async () => { const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}/projects`, "DELETE"); onUpdated(result.device); })} className="h-10 w-full rounded-xl border border-zinc-300 text-xs">Clear completed history and logs</Button>}
+    <TabGroup selectedIndex={tab} onChange={(index) => { setTab(index); setSaved(null); setError(null); }}>
+      <TabList className="flex gap-1 overflow-x-auto rounded-xl bg-zinc-100 p-1 dark:bg-zinc-800">{[...PROJECTS.map((p) => p.name), "Upload project"].map((name) => <Tab key={name} className="whitespace-nowrap rounded-lg px-4 py-2 text-xs font-medium outline-none data-selected:bg-white data-selected:shadow-sm data-focus:ring-2 data-focus:ring-blue-500 dark:data-selected:bg-zinc-900">{name}</Tab>)}</TabList>
+      <TabPanels className="mt-4">{PROJECTS.map((project) => <TabPanel key={project.id} className={cardClass + " space-y-4 p-4"}>
+        <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">{project.name}</h3>{device.activeProject === project.id && <span className="text-xs text-emerald-600">Active on board</span>}</div>
+        <p className="text-xs text-zinc-500">{project.description}</p>
+        {"version" in project && <p className="text-xs text-zinc-500">v{project.version} · {(project.size / 1024).toFixed(1)} KB · <a href={project.path} download className="text-blue-600 underline">Download single project file</a></p>}
+        {project.id === "weather" && <fieldset disabled={busy}><WeatherProjectSettings lat={lat} lon={lon} unit={unit} onCoordinates={(a,b) => { setLat(a); setLon(b); setSaved(null); }} onUnit={(value) => { setUnit(value); setSaved(null); }} /></fieldset>}
+        {project.id === "analog-clock" && <fieldset disabled={busy}><ClockProjectSettings timezone={timezone} seconds={seconds} onTimezone={(value) => { setTimezone(value); setSaved(null); }} onSeconds={(value) => { setSeconds(value); setSaved(null); }} /></fieldset>}
+        {project.id === "none" && <p className="text-xs text-zinc-500">Restore the original firmware display while keeping your board settings. No additional file is required.</p>}
+        {saved?.project === project.id && <p role="status" className="text-xs text-emerald-600">{saved.message}</p>}
+        <div className="flex flex-wrap gap-2">
+          {project.id !== "none" && <Button disabled={busy || loading || stopping} onClick={() => run(() => save(project.id))} className={accentButton + " h-10 px-4"}>Save {project.name} settings</Button>}
+          <Button disabled={disabled || (project.id !== "none" && !modern) || (project.id === "none" && device.activeProject === "none")} onClick={() => install(project.id)} className={accentButton + " h-10 px-4"}>{device.activeProject === project.id ? project.id === "none" ? "Active project" : "Reinstall project" : `Load ${project.name}`}</Button>
+        </div>
+      </TabPanel>)}<TabPanel>    <section className={cardClass + " space-y-3 p-4"}><h3 className="text-sm font-semibold">Upload a project file</h3><p className="text-xs text-zinc-500">Choose one .elf file containing its project identity. No companion files are needed. Maximum 128 KB.</p><input aria-label="Project file" type="file" accept=".elf" disabled={busy} className="w-full text-xs" onChange={async (e) => { const selected = e.target.files?.[0]; setFile(null); setFileName(""); setError(null); if (!selected) return; try { const meta = inspectProject(new Uint8Array(await selected.arrayBuffer())); setFile(selected); setFileName(`${meta.name} · v${meta.version} · ${selected.size.toLocaleString()} bytes`); } catch (err) { setError(errorMessage(err)); } }} />{fileName && <p className="text-xs text-zinc-500">{fileName}</p>}{upload !== null && <div role="status" className="text-xs">Uploading to console: {upload}%<progress value={upload} max={100} className="w-full" /><Button onClick={() => xhr.current?.abort()} className="mt-2 underline">Stop upload</Button></div>}<Button disabled={disabled || !modern || !file} onClick={uploadFile} className={accentButton + " h-10 px-4"}>Upload and load</Button></section>
+</TabPanel></TabPanels>
+    </TabGroup>
+    {device.commands.some((c) => c.type.startsWith("project_") && !projectPending(c)) && <Button disabled={busy} onClick={() => run(async () => { const result = await api<{ device: PublicDevice }>(`/api/devices/${device.id}/projects`, "DELETE"); onUpdated(result.device); })} className="h-10 w-full rounded-xl border border-zinc-300 text-xs">Clear completed history and logs · all projects</Button>}
     {device.commands.filter((c) => c.type === "project_install").length > 1 && <details className={cardClass + " p-4"}><summary className="cursor-pointer text-xs">Installation history</summary>{device.commands.filter((c) => c.type === "project_install" && c.id !== installation?.id).reverse().map((c) => <div key={c.id} className="mt-3 text-xs"><p>{new Date(c.createdAt).toLocaleString()} · {c.transfer?.name ?? new URLSearchParams(c.arg).get("id")} · {c.transfer?.phase ?? c.status}</p><p className="text-zinc-500">{c.result}</p></div>)}</details>}
+  </div>;
+}
+
+function ClockProjectSettings({ timezone, seconds, onTimezone, onSeconds }: { timezone: string; seconds: boolean; onTimezone: (value: string) => void; onSeconds: (value: boolean) => void }) {
+  const [now, setNow] = useState<Date | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => { const tick = () => setNow(new Date()); tick(); const timer = setInterval(tick, 1000); return () => clearInterval(timer); }, []);
+  const preview = now ? new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) }).format(now) : "—";
+  return <div className="space-y-4">
+    <div className="rounded-xl bg-zinc-100 p-4 text-center dark:bg-zinc-800"><p className="font-mono text-2xl tabular-nums">{preview}</p><p className="mt-1 text-xs text-zinc-500">Live preview · {timezone}</p></div>
+    <label className="block space-y-1 text-xs">Board time zone<select value={timezone} onChange={(e) => onTimezone(e.target.value)} className={inputClass}>{TIME_ZONES.map((zone) => <option key={zone.id} value={zone.id}>{zone.label} · {zone.id}</option>)}</select></label>
+    <Button onClick={() => { const zone = Intl.DateTimeFormat().resolvedOptions().timeZone; if (TIME_ZONES.some((entry) => entry.id === zone)) { onTimezone(zone); setMessage(`Selected ${zone}`); } else setMessage(`Your time zone is ${zone}. Select a supported board time zone from the list.`); }} className="text-xs text-blue-600 underline">Use my browser’s time zone</Button>
+    {message && <p role="status" className="text-xs text-zinc-500">{message}</p>}
+    <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={seconds} onChange={(e) => onSeconds(e.target.checked)} />Show second hand</label>
+    <p className="text-xs text-zinc-500">Named time zones follow daylight-saving rules automatically. The board needs a network connection to synchronize time. These settings also control the board’s status-bar time.</p>
   </div>;
 }
