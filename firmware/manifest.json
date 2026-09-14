@@ -1,0 +1,43 @@
+{
+  "boards": [
+    {
+      "id": "esp32-s3-lcd-0.85",
+      "name": "ESP32-S3-LCD-0.85",
+      "vendor": "Waveshare",
+      "chip": "ESP32-S3",
+      "flashSizeMb": 8,
+      "preserve": [
+        {
+          "name": "nvs",
+          "offset": 36864,
+          "size": 20480
+        }
+      ],
+      "versions": [
+        {
+          "version": "1.9.0",
+          "builtAt": "2026-09-14T12:03:07.943Z",
+          "size": 1941504,
+          "sha256": "76232bdba6f2259fd457f48ddb894f7b500ec656a96c7b34bf25239915975b74",
+          "app": {
+            "size": 1875408,
+            "sha256": "d67a2e3f757c6b02f0c26e013a17639a66b1d0e8bbbd1ca1e69a1473b0231833",
+            "md5": "31ae61e6590cfbc794b27eeb09712105"
+          }
+        },
+        {
+          "version": "1.8.2",
+          "builtAt": "2026-09-14T11:09:49.606Z",
+          "size": 1851392,
+          "sha256": "e6a974ca1a4eee15ff849c5b9814a0167ac7e257e383743b186a23ba8bc96322"
+        },
+        {
+          "version": "1.7.1",
+          "builtAt": "2026-09-14T10:25:59.555Z",
+          "size": 1732608,
+          "sha256": "40c684dc0db92ec0ca54154f56c83e2cc8091c086f42c52ae33442ca1bc4ae8e"
+        }
+      ]
+    }
+  ]
+}

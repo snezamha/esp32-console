@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// An unlinked board waiting for someone to enter its code. One row per board (by MAC); a
+/// restart replaces the previous pending row for that board.
+model Pairing {
+  mac       String    @id
+  secret    String
+  code      String
+  board     String    @default("")
+  firmware  String    @default("")
+  expiresAt DateTime
+  /// Set once the code is entered; the board picks up the device row on its next sync.
+  deviceId  String?
+
+  @@index([code])
+}
+
+model Device {
+  id        String   @id @default(uuid())
+  /// Google account id (JWT `sub`) that added this device.
+  owner     String
+  token     String   @unique
+  name      String   @default("")
+  mac       String
+  board     String   @default("")
+  firmware  String   @default("")
+  createdAt DateTime @default(now())
+  lastSeen  DateTime @default(now())
+  ip        String   @default("")
+  rssi      Int      @default(0)
+  battery   Int      @default(-1)
+  charging  Boolean  @default(false)
+  heap      Int      @default(0)
+  uptime    Int      @default(0)
+  /// Bumped on every console settings edit; the board applies settings when its rev is older.
+  rev       Int      @default(0)
+  /// Optimistic-concurrency guard: bumped on every write to this row.
+  version   Int      @default(0)
+
+  /// Last settings uploaded by the board.
+  reported         Json
+  /// Console edits not yet confirmed by the board: { [key]: { value, rev } }.
+  pending          Json    @default("{}")
+  settingsReported Boolean @default(false)
+  commands         Json    @default("[]")
+  tests            Json    @default("{}")
+  testsUpdatedAt   DateTime?
+  /// One entry per minute, oldest first: { t, battery, rssi, heap }.
+  samples          Json    @default("[]")
+  ota              Json?
+  /// [primary ssid, backup ssid].
+  networks         Json    @default("[]")
+
+  @@index([owner])
+  @@index([mac])
+}

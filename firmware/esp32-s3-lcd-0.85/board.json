@@ -1,0 +1,15 @@
+{
+  "id": "esp32-s3-lcd-0.85",
+  "name": "ESP32-S3-LCD-0.85",
+  "vendor": "Waveshare",
+  "chip": "ESP32-S3",
+  "flashSizeMb": 8,
+  "fqbn": "esp32:esp32:esp32s3:FlashSize=8M,PartitionScheme=default_8MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi",
+  "preserve": [
+    {
+      "name": "nvs",
+      "offset": 36864,
+      "size": 20480
+    }
+  ]
+}
