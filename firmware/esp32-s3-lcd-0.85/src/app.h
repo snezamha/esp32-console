@@ -32,6 +32,9 @@ class App {
   void OnClockTick();
   void UpdateStatus();
   void UpdatePowerHold(uint32_t now);
+  // Restarts if free heap stays critically low: cheaper than chasing a slow leak, and every
+  // setting is in NVS, so nothing is lost. Skipped mid update (a restart would abort the OTA).
+  void CheckHeap(uint32_t now);
   void DrawHome(Canvas& canvas, int x, int y, int width, int height, const Theme& theme);
   std::string HomeSignature() const;
   void DrawOverlay(Canvas& canvas, int width, int height, const Theme& theme);
@@ -70,6 +73,7 @@ class App {
   uint32_t last_input_ = 0;
   uint32_t last_menu_refresh_ = 0;
   uint32_t splash_until_ = 0;
+  uint32_t low_heap_since_ = 0;
   // Power hold ring: 0 = hidden, otherwise 0–1 progress.
   float hold_progress_ = 0;
   std::string hold_label_;

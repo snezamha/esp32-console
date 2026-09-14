@@ -287,6 +287,7 @@ void App::Loop() {
   WebPortal::GetInstance().Loop(now);
   ConsoleClient::GetInstance().Loop(now);
   UpdatePowerHold(now);
+  CheckHeap(now);
 
   if (splash_until_ != 0) {
     board.GetDisplay()->Invalidate();
@@ -1286,6 +1287,37 @@ void App::Identify() {
     delay(150);
   }
   ApplySettings();  // Restores the configured LED state
+}
+
+namespace {
+// TLS handshakes alone need on the order of 40 KB; below this the console link and web portal
+// silently fail (and stay failing until something frees memory some other way).
+constexpr uint32_t kLowHeapBytes = 32 * 1024;
+// How long it has to stay that low before restarting — a brief dip during a burst of activity
+// (e.g. several checks at once) should not trigger this.
+constexpr uint32_t kLowHeapGraceMs = 5 * 60 * 1000;
+}  // namespace
+
+void App::CheckHeap(uint32_t now) {
+  if (ConsoleClient::GetInstance().OtaProgress() >= 0) {
+    low_heap_since_ = 0;  // Never interrupt an update.
+    return;
+  }
+  if (ESP.getFreeHeap() >= kLowHeapBytes) {
+    low_heap_since_ = 0;
+    return;
+  }
+  if (low_heap_since_ == 0) {
+    low_heap_since_ = now;
+    return;
+  }
+  if (now - low_heap_since_ < kLowHeapGraceMs) return;
+
+  Serial.printf("{\"event\":\"restart\",\"reason\":\"low heap\",\"free\":%lu}\n",
+                (unsigned long)ESP.getFreeHeap());
+  Serial.flush();
+  delay(100);
+  ESP.restart();
 }
 
 void App::PrintInfo() {

@@ -264,7 +264,11 @@ void ConsoleClient::Loop(uint32_t now_ms) {
 
 std::string ConsoleClient::CommonFields() {
   auto& network = Network::GetInstance();
-  std::string body = "mac=" + UrlEncode(MacAddress()) +
+  // Runs on every poll for as long as the board is on; a plain "+" chain regrows the string
+  // several times per call, which fragments the heap over many hours. One reservation avoids that.
+  std::string body;
+  body.reserve(256);
+  body = "mac=" + UrlEncode(MacAddress()) +
                      "&board=" + UrlEncode(Board::GetInstance().GetBoardType()) +
                      "&fw=" + UrlEncode(FIRMWARE_VERSION) + "&ip=" + UrlEncode(network.WifiIp()) +
                      "&rssi=" + std::to_string(network.WifiRssi());
