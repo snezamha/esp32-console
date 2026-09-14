@@ -2,7 +2,7 @@
 
 import { Button } from "@headlessui/react";
 import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthCard } from "@/components/AuthCard";
 import { Select } from "@/components/Select";
 import { ErrorText, accentButton, cardClass, inputClass } from "@/components/ui";
@@ -18,43 +18,50 @@ export function Projects({ active }: { active: boolean }) {
   const user = session?.user;
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   const [selected, setSelected] = useState("");
+  const updates = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  const installing = devices?.some((device) => {
+    const command = device.commands.findLast((command) => command.type === "project_install");
+    return command?.status === "queued" || command?.status === "sent";
+  }) ?? false;
+
+  // Fetch a snapshot when entering the tab; an idle Projects tab needs no live connection.
   useEffect(() => {
     if (!active || !user) return;
+    let cancelled = false;
+    const revision = updates.current;
+    api<{ devices: PublicDevice[] }>("/api/devices")
+      .then(({ devices }) => {
+        if (!cancelled && revision === updates.current) { setDevices(devices); setError(null); }
+      })
+      .catch((err) => { if (!cancelled && revision === updates.current) setError(errorMessage(err)); });
+    return () => { cancelled = true; };
+  }, [active, user]);
+
+  // Follow actual installations until confirmation or failure, then close the connection.
+  useEffect(() => {
+    if (!active || !user || !installing) return;
     let source: EventSource | null = null;
-    let staleTimer: ReturnType<typeof setTimeout> | undefined;
-    const armWatchdog = () => {
-      clearTimeout(staleTimer);
-      // Healthy requests close after at most 8 seconds, then EventSource reconnects.
-      // Show a warning only after a sustained absence of successful device updates.
-      staleTimer = setTimeout(() => setError("Connection interrupted. Reconnecting…"), 20_000);
-    };
     const open = () => {
       source?.close();
       source = new EventSource("/api/devices/stream");
-      armWatchdog();
       source.addEventListener("devices", (event) => {
+        updates.current += 1;
         setDevices(JSON.parse((event as MessageEvent).data));
-        setError(null);
-        armWatchdog();
       });
-      // EventSource automatically reconnects after both normal closes and network errors.
+      // EventSource retries normal short-lived responses automatically, without warnings.
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") open();
-      else {
-        source?.close();
-        clearTimeout(staleTimer);
-      }
+      else source?.close();
     };
     onVisibility();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       source?.close();
-      clearTimeout(staleTimer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [active, user]);
+  }, [active, user, installing]);
   if (status === "loading") return <p className="py-8 text-center text-sm text-zinc-500">Loading…</p>;
   if (!user) return <AuthCard />;
   const device = devices?.find((d) => d.id === selected) ?? devices?.[0];
@@ -69,7 +76,10 @@ export function Projects({ active }: { active: boolean }) {
       {devices?.length === 0 && <p className="rounded-xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-500">Add a board in Devices to install a project.</p>}
       {device && <>
         <Select label="Board" value={device} options={devices ?? []} onChange={(d) => setSelected(d.id)} getKey={(d) => d.id} renderValue={(d) => `${deviceName(d)} · ${d.online ? "Online" : "Offline"}`} />
-        <ProjectPicker key={device.id} device={device} onUpdated={(updated) => setDevices((current) => current?.map((d) => d.id === updated.id ? updated : d) ?? [updated])} />
+        <ProjectPicker key={device.id} device={device} onUpdated={(updated) => {
+          updates.current += 1;
+          setDevices((current) => current?.map((d) => d.id === updated.id ? updated : d) ?? [updated]);
+        }} />
       </>}
     </div>
   );
