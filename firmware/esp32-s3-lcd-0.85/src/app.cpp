@@ -405,15 +405,17 @@ std::string App::HomeSignature() const {
   auto& console = ConsoleClient::GetInstance();
   return network.WifiStatus() + "|" + network.WifiSsid() + "|" + network.WifiIp() + "|" +
          (network.AccessPointActive() ? network.AccessPointIp() : "") + "|" + console.StateText() +
-         "|" + console.Code() + "|" + console.Name();
+         "|" + console.Code() + "|" + console.Name() + "|" + console.Server() + "|" + console.LastError();
 }
 
 void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   auto& network = Network::GetInstance();
   const int cx = x + w / 2;
-  // Keep setup and pairing visible; installed modules draw only inside the content area.
+  auto& console = ConsoleClient::GetInstance();
+  // A saved project must not obscure pairing or a failed pairing connection.
   const bool pairing = network.State() == Network::WifiState::Setup ||
-      ConsoleClient::GetInstance().GetState() == ConsoleClient::State::Pairing;
+      !console.Code().empty() ||
+      (network.State() == Network::WifiState::Connected && !console.HasLink());
   if (!pairing && ProjectRuntime::Get().Draw(c, x, y, w, h, theme)) return;
   const int line = Canvas::LineHeight() + 2;
   std::vector<std::pair<std::string, uint16_t>> lines;
@@ -438,8 +440,7 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
       }
       break;
     case Network::WifiState::Connected: {
-      auto& console = ConsoleClient::GetInstance();
-      if (console.GetState() == ConsoleClient::State::Pairing && !console.Code().empty()) {
+      if (!console.Code().empty()) {
         // Verification code for Devices -> Add Device in the web console.
         const std::string& code = console.Code();
         const std::string spaced = code.size() == 6 ? code.substr(0, 3) + " " + code.substr(3) : code;
@@ -453,6 +454,18 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
         ty += line;
         c.TextCentered(cx, ty, console.ServerHost().c_str(), theme.text);
         return;
+      }
+      if (!console.HasLink()) {
+        if (console.Server().empty()) {
+          lines = {{"Console not set", theme.info}, {"Devices > Add", theme.muted},
+                   {"Connect via USB", theme.text}};
+        } else if (!console.LastError().empty()) {
+          lines = {{"Pairing failed", theme.fail}, {console.LastError(), theme.text},
+                   {console.ServerHost(), theme.muted}, {"Retrying...", theme.info}};
+        } else {
+          lines = {{"Getting code...", theme.info}, {console.ServerHost(), theme.text}};
+        }
+        break;
       }
       lines = {{network.WifiSsid(), theme.muted}, {network.WifiIp(), theme.info}};
       if (console.GetState() == ConsoleClient::State::Linked && !console.Name().empty()) {
@@ -712,7 +725,7 @@ MenuItems App::BuildConsoleMenu() {
     }));
   }
 
-  if (console.GetState() == ConsoleClient::State::Linked) {
+  if (console.HasLink()) {
     items.push_back(Submenu("Unlink", [this, &console]() {
       return BuildConfirmMenu("Unlink", [this, &console]() {
         console.Unlink();

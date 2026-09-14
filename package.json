@@ -13,7 +13,8 @@
     "db:studio": "prisma studio",
     "projects:build": "node scripts/build-projects.mjs",
     "projects:verify": "node scripts/verify-projects.mjs",
-    "projects:test": "node scripts/test-projects.mjs"
+    "projects:test": "node scripts/test-projects.mjs",
+    "firmware:test:pairing": "node scripts/test-pairing-display.mjs"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.10",

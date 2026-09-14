@@ -51,6 +51,7 @@ class ConsoleClient {
   void Unlink();
 
   State GetState() const { return state_; }
+  bool HasLink() const { return !token_.empty(); }
   // "Off", "Offline", "Connecting", "Pairing", "Linked", "Error"
   const char* StateText() const;
   const std::string& Code() const { return code_; }

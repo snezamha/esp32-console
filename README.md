@@ -153,3 +153,5 @@ This writes separate `.elf` files into `public/projects/<board>/<project>/<versi
 Build the generic base separately with `pnpm firmware:build`. Firmware v1.0.5 retains automatic right-to-left marquee for overflowing text, with pauses at both ends; long notifications stay visible for a full pass.
 
 The loader is vendored from [Espressif’s ELF loader](https://github.com/espressif/esp-iot-solution/tree/6958385313b0e4fc1f3de259b1d677fca7d7d236/components/elf_loader), with pinned provenance and Apache-2.0 license under `src/runtime/elf_loader/`.
+
+Pairing display diagnostics (base firmware v1.0.6+): a received code remains visible through transient connection errors. An unlinked board shows `Getting code...`, `Pairing failed` with the error, or `Console not set` with USB setup instructions; an installed project cannot obscure these screens. Existing device tokens survive flashing, so already-linked boards do not receive another code; use **Menu → Console → Unlink** to pair again, including while the server is temporarily offline. Run `pnpm firmware:test:pairing` for the display regression checks.
