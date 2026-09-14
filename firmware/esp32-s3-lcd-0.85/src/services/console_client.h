@@ -11,15 +11,19 @@
 // Link to the ESP32 Console web app (POST <server>/api/device/sync).
 //
 // While Wi-Fi is connected the board keeps a long poll open: the server answers as soon as
-// there is something to deliver, or after 25 s.
+// there is something to deliver, or after a few seconds.
 //   unlinked  the server hands out a 6-digit code; the screen shows it until someone enters
 //             it under Devices → Add Device, then the board receives and stores its token
 //   linked    the board applies settings changed in the console and runs its commands
-// Changes on the board itself (settings, check results, update progress) go up right away in a
-// second, short request. Removing the device in the console (or Unlink on the board) drops the
-// token, and the next check-in shows a new code.
+// A local change (settings, check results) goes up on the *next* poll — reaching the console a
+// few seconds late rather than immediately — because only one network task ever runs at a time:
+// the ESP32's Wi-Fi/lwIP stack is not safe against two concurrent requests (seen as a hard crash,
+// `udp_new_ip_type: Required to lock TCPIP core functionality`, when this ran a second "push it
+// now" request alongside a held poll). Removing the device in the console (or Unlink on the
+// board) drops the token, and the next check-in shows a new code.
 //
-// Requests run on background tasks; results are handled in Loop() on the main task.
+// Exactly one request (or the over-the-air download) runs on a background task at a time;
+// results are handled in Loop() on the main task.
 class ConsoleClient {
  public:
   enum class State { Off, Offline, Connecting, Pairing, Linked, Error };
@@ -98,7 +102,6 @@ class ConsoleClient {
   bool Start(Slot& slot, const std::string& body, uint32_t timeout_ms);
   std::string CommonFields();
   void StartPoll(uint32_t now_ms);
-  void StartReport(uint32_t now_ms);
   void HandlePoll(int http_code, const std::string& body);
   void HandleCommand(const Command& command);
   void StartOta(const Command& command);
@@ -123,14 +126,11 @@ class ConsoleClient {
   std::string error_;
   uint32_t next_poll_ms_ = 0;
   uint32_t last_poll_start_ms_ = 0;
-  uint32_t next_report_ms_ = 0;
   int failures_ = 0;
 
   Slot poll_{"console_poll"};
-  Slot report_{"console_report"};
   std::vector<std::string> acks_;
   std::string reported_state_;
-  uint32_t last_state_check_ms_ = 0;
   std::vector<std::string> seen_commands_;
 
   // Over-the-air update (runs on its own task).

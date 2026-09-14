@@ -36,8 +36,6 @@ constexpr uint32_t kRequestTimeoutMs = 10000;
 constexpr uint32_t kMinPollIntervalMs = 1000;
 constexpr uint32_t kRetryMs = 3000;
 constexpr uint32_t kMaxBackoffMs = 60000;
-// Check the board state for changes this often.
-constexpr uint32_t kStateCheckMs = 500;
 constexpr size_t kSeenCommands = 16;
 
 std::string UrlEncode(const std::string& value) {
@@ -230,20 +228,6 @@ void ConsoleClient::Loop(uint32_t now_ms) {
     HandlePoll(poll_.code, poll_.response);
     poll_.busy = false;
   }
-  if (report_.done) {
-    report_.done = false;
-    const bool ok = report_.code == 200;
-    if (ok) {
-      reported_state_ = report_.state;
-      NoteAcksDelivered(report_.acks, now_ms);
-    } else {
-      acks_.insert(acks_.begin(), report_.acks.begin(), report_.acks.end());
-      next_report_ms_ = now_ms + kRetryMs;
-    }
-    report_.acks.clear();
-    report_.busy = false;
-  }
-
   if (ota_finished_) {
     ota_finished_ = false;
     FinishOta(now_ms);
@@ -269,15 +253,12 @@ void ConsoleClient::Loop(uint32_t now_ms) {
     next_poll_ms_ = now_ms;
   }
 
+  // Only ever one network task in flight (this poll, or the OTA download): the Wi-Fi/lwIP stack
+  // is not safe against two concurrent requests. A local change (settings, check results) goes
+  // up on the poll after this one, not instantly.
   if (!poll_.busy && static_cast<int32_t>(now_ms - next_poll_ms_) >= 0 &&
       now_ms - last_poll_start_ms_ >= kMinPollIntervalMs && !ota_active_) {
     StartPoll(now_ms);
-  }
-  // While a poll waits (or an update runs), local changes go up in a separate short request.
-  if (!token_.empty() && (poll_.busy || ota_active_) && !report_.busy &&
-      now_ms - last_state_check_ms_ >= kStateCheckMs && static_cast<int32_t>(now_ms - next_report_ms_) >= 0) {
-    last_state_check_ms_ = now_ms;
-    StartReport(now_ms);
   }
 }
 
@@ -336,21 +317,6 @@ void ConsoleClient::StartPoll(uint32_t now_ms) {
   if (wait) body += "&wait=" + std::to_string(kPollWaitS);
 
   if (!Start(poll_, body, wait ? kPollTimeoutMs : kRequestTimeoutMs)) next_poll_ms_ = now_ms + kRetryMs;
-}
-
-void ConsoleClient::StartReport(uint32_t now_ms) {
-  const std::string state = state_provider_ ? state_provider_() : "";
-  const bool ota_changed = !ota_state_.empty() && ota_progress_ / 5 != ota_reported_progress_ / 5;
-  if (state == reported_state_ && acks_.empty() && !ota_changed) return;
-
-  std::string body = CommonFields() + "&token=" + UrlEncode(token_) + "&rev=" + std::to_string(rev_) +
-                     "&report=1";
-  if (!state.empty()) body += "&" + state;
-  for (const auto& ack : acks_) body += "&ack=" + UrlEncode(ack);
-  report_.acks = acks_;
-  report_.state = state;
-  acks_.clear();
-  if (!Start(report_, body, kRequestTimeoutMs)) next_report_ms_ = now_ms + kRetryMs;
 }
 
 void ConsoleClient::RequestTask(void* arg) {
