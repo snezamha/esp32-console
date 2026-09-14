@@ -126,22 +126,45 @@ async function status() {
   } catch (e) {}
 }
 
+// The list is rebuilt from scratch on every render; doing that while a finger is mid-tap makes
+// the button disappear from under it. So once real results are showing, later scan ticks only
+// refresh signal bars in place (never replace the list), and a full rebuild waits for the dialog
+// to be closed — a tap can no longer land on a button that gets swapped out underneath it.
+let nets = [];
+let listBuilt = false;
+
 async function scan(force) {
-  if (force) $('list').innerHTML = '<li class="empty"><span class="spin"></span> Scanning…</li>';
+  if (force) { listBuilt = false; $('list').innerHTML = '<li class="empty"><span class="spin"></span> Scanning…</li>'; }
   try {
     const r = await (await fetch('/api/scan' + (force ? '?force=1' : ''))).json();
     if (r.scanning && !r.networks.length) { setTimeout(() => scan(false), 1500); return; }
     const seen = new Set();
-    const nets = r.networks.filter((n) => n.ssid && !seen.has(n.ssid) && seen.add(n.ssid));
-    $('list').innerHTML = nets.length ? nets.map((n, i) =>
-      '<li><button data-i="' + i + '">' + bars(n.rssi) + '<span class="name">' + esc(n.ssid) +
-      '</span>' + (n.secure ? '<span class="lock">🔒</span>' : '') + '</button></li>').join('')
-      : '<li class="empty">No networks found</li>';
-    $('list').querySelectorAll('button').forEach((b) => b.onclick = () => open(nets[b.dataset.i]));
+    nets = r.networks.filter((n) => n.ssid && !seen.has(n.ssid) && seen.add(n.ssid));
+    render(!$('dlg').open);
     if (r.scanning) setTimeout(() => scan(false), 1500);
   } catch (e) {
     setTimeout(() => scan(false), 2000);
   }
+}
+
+function render(allowRebuild) {
+  const rows = $('list').children;
+  if (listBuilt && rows.length === nets.length && allowRebuild !== false) {
+    // Same networks as last render (by position): update signal/lock in place, keep the buttons.
+    nets.forEach((n, i) => {
+      const row = rows[i];
+      if (row.dataset.ssid !== n.ssid) { listBuilt = false; return; }
+      row.querySelector('.bars').outerHTML = bars(n.rssi);
+    });
+    if (listBuilt) return;
+  }
+  if (!allowRebuild) return; // A rebuild while the dialog is open would yank the list underneath it.
+  listBuilt = true;
+  $('list').innerHTML = nets.length ? nets.map((n, i) =>
+    '<li><button data-i="' + i + '" data-ssid="' + esc(n.ssid) + '">' + bars(n.rssi) + '<span class="name">' + esc(n.ssid) +
+    '</span>' + (n.secure ? '<span class="lock">🔒</span>' : '') + '</button></li>').join('')
+    : '<li class="empty">No networks found</li>';
+  $('list').querySelectorAll('button').forEach((b) => b.onclick = () => open(nets[b.dataset.i]));
 }
 
 function open(net) {

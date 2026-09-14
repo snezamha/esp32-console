@@ -15,6 +15,17 @@
       ],
       "versions": [
         {
+          "version": "1.9.2",
+          "builtAt": "2026-09-14T17:14:05.349Z",
+          "size": 1941504,
+          "sha256": "fddb5975c7f11f79a01ea919d50c4d012d73345ad690dcc7faaf50d88169b048",
+          "app": {
+            "size": 1875056,
+            "sha256": "b9e11db42dc18cb759bf8b77456c28b475297955c8092fcfe25bdcd748bf90f6",
+            "md5": "1a780bc92e0f7ef1a721033b832077d1"
+          }
+        },
+        {
           "version": "1.9.1",
           "builtAt": "2026-09-14T17:05:01.098Z",
           "size": 1941504,
