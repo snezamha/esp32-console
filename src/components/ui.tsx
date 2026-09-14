@@ -10,7 +10,7 @@ import {
   Label,
   Switch,
 } from "@headlessui/react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export const primaryButton =
   "rounded-xl bg-zinc-900 text-sm font-medium text-white transition data-active:scale-[.99] data-disabled:cursor-not-allowed data-disabled:opacity-50 data-hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:data-hover:bg-zinc-200";
@@ -153,4 +153,81 @@ export function Group({ title, children }: { title: string; children: ReactNode 
 
 export function ErrorText({ children }: { children: ReactNode }) {
   return children ? <p className="text-sm text-red-600 dark:text-red-400">{children}</p> : null;
+}
+
+/** Transient bottom-of-screen message. Use with <ToastBanner toast={toast} />. */
+export function useToast() {
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+  return [toast, setToast] as const;
+}
+
+export function ToastBanner({ toast }: { toast: string | null }) {
+  if (!toast) return null;
+  return (
+    <div
+      role="status"
+      className="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 mx-auto max-w-sm rounded-xl bg-zinc-900 px-4 py-3 text-center text-sm text-white shadow-lg dark:bg-white dark:text-zinc-900"
+    >
+      {toast}
+    </div>
+  );
+}
+
+/** Reusable destructive/neutral confirmation sheet. */
+export function ConfirmDialog({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  description,
+  confirmLabel = "Confirm",
+  danger = true,
+  busy,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: ReactNode;
+  description: ReactNode;
+  confirmLabel?: string;
+  danger?: boolean;
+  busy?: boolean;
+}) {
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          <Button onClick={onClose} className={secondaryButton + " h-10 px-4"}>
+            Cancel
+          </Button>
+          <Button
+            onClick={onConfirm}
+            disabled={busy}
+            className={
+              danger
+                ? "h-10 rounded-xl bg-red-600 px-4 text-sm font-medium text-white data-hover:bg-red-500 data-disabled:cursor-not-allowed data-disabled:opacity-50"
+                : accentButton + " h-10 px-4"
+            }
+          >
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-zinc-500">{description}</p>
+    </Sheet>
+  );
+}
+
+/** Pulsing placeholder block for content still loading. */
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-xl bg-zinc-200 dark:bg-zinc-800 ${className}`} aria-hidden />;
 }

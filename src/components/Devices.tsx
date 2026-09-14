@@ -7,7 +7,7 @@ import { AddDeviceDialog } from "@/components/AddDeviceDialog";
 import { AuthCard } from "@/components/AuthCard";
 import { ConfigureDialog } from "@/components/ConfigureDialog";
 import { DeviceDetails, type DetailsTab } from "@/components/DeviceDetails";
-import { ErrorText, Sheet, cardClass, inputClass, primaryButton, secondaryButton } from "@/components/ui";
+import { ConfirmDialog, ErrorText, Sheet, Skeleton, ToastBanner, cardClass, inputClass, primaryButton, secondaryButton, useToast } from "@/components/ui";
 import {
   LOW_BATTERY,
   api,
@@ -34,7 +34,8 @@ export function Devices({ active }: { active: boolean }) {
   const [connection, setConnection] = useState<"connecting" | "live" | "retrying">("connecting");
   const [addOpen, setAddOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [toast, setToast] = useToast();
 
   // Live list while the tab is visible: each request holds briefly and returns the current list,
   // so the browser sees changes almost immediately without a fixed polling interval.
@@ -67,12 +68,6 @@ export function Devices({ active }: { active: boolean }) {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [active, user]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 3000);
-    return () => clearTimeout(timer);
-  }, [toast]);
 
   if (status === "loading") return <p className="py-8 text-center text-sm text-zinc-500">Loading…</p>;
   if (!user) return <AuthCard />;
@@ -129,6 +124,13 @@ export function Devices({ active }: { active: boolean }) {
         </div>
       </section>
 
+      {devices === null && (
+        <div className="space-y-3" aria-hidden>
+          <Skeleton className="h-[168px] w-full" />
+          <Skeleton className="h-[168px] w-full" />
+        </div>
+      )}
+
       {devices?.length === 0 && (
         <section className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-zinc-300 p-8 text-center dark:border-zinc-700">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="size-8 text-zinc-400" aria-hidden>
@@ -144,23 +146,35 @@ export function Devices({ active }: { active: boolean }) {
         </section>
       )}
 
-      {devices?.map((device) => (
-        <DeviceCard
-          key={device.id}
-          device={device}
-          onDialog={setDialog}
-          onIdentify={() => command(device, { type: "identify" }, "Identifying")}
+      {devices && devices.length > 1 && (
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search devices"
+          aria-label="Search devices"
+          className={inputClass}
         />
-      ))}
-
-      {toast && (
-        <div
-          role="status"
-          className="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 mx-auto max-w-sm rounded-xl bg-zinc-900 px-4 py-3 text-center text-sm text-white shadow-lg dark:bg-white dark:text-zinc-900"
-        >
-          {toast}
-        </div>
       )}
+
+      {(() => {
+        const filtered = devices?.filter((d) => {
+          const q = query.trim().toLowerCase();
+          return !q || deviceName(d).toLowerCase().includes(q) || boardName(d.board).toLowerCase().includes(q);
+        });
+        if (devices && devices.length > 0 && filtered?.length === 0) {
+          return <p className="py-6 text-center text-sm text-zinc-500">No devices match “{query}”.</p>;
+        }
+        return filtered?.map((device) => (
+          <DeviceCard
+            key={device.id}
+            device={device}
+            onDialog={setDialog}
+            onIdentify={() => command(device, { type: "identify" }, "Identifying")}
+          />
+        ));
+      })()}
+
+      <ToastBanner toast={toast} />
 
       <AddDeviceDialog
         open={addOpen}
@@ -189,32 +203,22 @@ export function Devices({ active }: { active: boolean }) {
         />
       )}
       {dialog?.kind === "confirm" && current && (
-        <Sheet
+        <ConfirmDialog
           open
           onClose={() => setDialog(null)}
+          onConfirm={confirm}
           title={{ restart: "Restart device?", poweroff: "Power off device?", remove: "Remove device?" }[dialog.action]}
-          footer={
+          confirmLabel={{ restart: "Restart", poweroff: "Power off", remove: "Remove" }[dialog.action]}
+          description={
             <>
-              <Button onClick={() => setDialog(null)} className={secondaryButton + " h-10 px-4"}>
-                Cancel
-              </Button>
-              <Button
-                onClick={confirm}
-                className="h-10 rounded-xl bg-red-600 px-4 text-sm font-medium text-white data-hover:bg-red-500"
-              >
-                {{ restart: "Restart", poweroff: "Power off", remove: "Remove" }[dialog.action]}
-              </Button>
+              {dialog.action === "restart" && `${deviceName(current)} restarts and reconnects within about 10 seconds.`}
+              {dialog.action === "poweroff" &&
+                `${deviceName(current)} switches off. It can only be switched on again with its power button.`}
+              {dialog.action === "remove" &&
+                `${deviceName(current)} is unlinked from your account. If it is online it shows a new verification code right away, so you can add it again.`}
             </>
           }
-        >
-          <p className="text-sm text-zinc-500">
-            {dialog.action === "restart" && `${deviceName(current)} restarts and reconnects within about 10 seconds.`}
-            {dialog.action === "poweroff" &&
-              `${deviceName(current)} switches off. It can only be switched on again with its power button.`}
-            {dialog.action === "remove" &&
-              `${deviceName(current)} is unlinked from your account. If it is online it shows a new verification code right away, so you can add it again.`}
-          </p>
-        </Sheet>
+        />
       )}
     </div>
   );

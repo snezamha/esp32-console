@@ -2,7 +2,7 @@
 
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { ErrorText, Sheet, accentButton, inputClass, secondaryButton } from "@/components/ui";
+import { ConfirmDialog, ErrorText, Sheet, ToastBanner, accentButton, inputClass, secondaryButton, useToast } from "@/components/ui";
 import {
   availableUpdate,
   boardName,
@@ -50,6 +50,7 @@ export function DeviceDetails({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [toast, setToast] = useToast();
 
   const run = async (key: string, body: Record<string, string>) => {
     setBusy(key);
@@ -92,7 +93,7 @@ export function DeviceDetails({
             <CheckPanel device={device} busy={busy} onRun={(test) => run(`test:${test}`, { type: "test", test })} />
           </TabPanel>
           <TabPanel>
-            <WifiPanel device={device} busy={busy} run={run} />
+            <WifiPanel device={device} busy={busy} run={run} onDone={setToast} />
           </TabPanel>
           <TabPanel>
             <FirmwarePanel device={device} busy={busy} onUpdate={(version) => run("ota", { type: "ota", version })} />
@@ -102,6 +103,7 @@ export function DeviceDetails({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      <ToastBanner toast={toast} />
     </Sheet>
   );
 }
@@ -203,6 +205,13 @@ const STATUS_STYLE: Record<TestResult["status"], string> = {
   fail: "bg-red-500",
   info: "bg-blue-500",
 };
+const STATUS_LABEL: Record<TestResult["status"], string> = {
+  idle: "Idle",
+  running: "Running",
+  ok: "OK",
+  fail: "Fail",
+  info: "Info",
+};
 
 function CheckPanel({ device, busy, onRun }: { device: PublicDevice; busy: string | null; onRun: (test: string) => void }) {
   const running = Object.values(device.tests).some((t) => t.status === "running");
@@ -226,8 +235,9 @@ function CheckPanel({ device, busy, onRun }: { device: PublicDevice; busy: strin
           const result = device.tests[test.key] ?? { status: "idle", detail: "" };
           return (
             <li key={test.key} className="flex items-center gap-3 px-3 py-2.5 text-sm">
-              <span className={`size-2 shrink-0 rounded-full ${STATUS_STYLE[result.status]}`} />
+              <span className={`size-2 shrink-0 rounded-full ${STATUS_STYLE[result.status]}`} aria-hidden />
               <span className="w-20 shrink-0 font-medium">{test.label}</span>
+              <span className="w-14 shrink-0 text-xs text-zinc-500">{STATUS_LABEL[result.status]}</span>
               <span className="min-w-0 flex-1 truncate text-xs text-zinc-500">{result.detail || "—"}</span>
               <Button
                 onClick={() => onRun(test.key)}
@@ -248,15 +258,23 @@ function WifiPanel({
   device,
   busy,
   run,
+  onDone,
 }: {
   device: PublicDevice;
   busy: string | null;
   run: (key: string, body: Record<string, string>) => Promise<boolean>;
+  onDone: (message: string) => void;
 }) {
   const [ssid, setSsid] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmForget, setConfirmForget] = useState(false);
   const [primary, backup] = device.networks;
   const pending = device.commands.findLast((c) => c.type.startsWith("wifi") && (c.status === "queued" || c.status === "sent"));
+
+  const forget = async () => {
+    setConfirmForget(false);
+    if (await run("wifi_forget", { type: "wifi_forget" })) onDone("Backup network will be forgotten when the device applies it.");
+  };
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
@@ -278,13 +296,21 @@ function WifiPanel({
       </p>
       {backup && (
         <Button
-          onClick={() => run("wifi_forget", { type: "wifi_forget" })}
+          onClick={() => setConfirmForget(true)}
           disabled={busy !== null}
           className={secondaryButton + " h-10 w-full"}
         >
           Forget backup network
         </Button>
       )}
+      <ConfirmDialog
+        open={confirmForget}
+        onClose={() => setConfirmForget(false)}
+        onConfirm={forget}
+        title="Forget backup network?"
+        confirmLabel="Forget"
+        description={`${backup} is removed from ${deviceName(device)}. The device falls back to the main network only.`}
+      />
       <form onSubmit={add} className="space-y-3 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800/60">
         <p className="text-sm font-medium">{backup ? "Replace backup network" : "Add backup network"}</p>
         <input value={ssid} onChange={(e) => setSsid(e.target.value)} placeholder="Network name" maxLength={32} required className={inputClass} />
