@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, formatSettingValue, sanitizeSettings } from "@/lib/device-settings";
 import { syncBoard, type SyncResult } from "@/lib/device-store";
+import { weatherPayload } from "@/lib/weather";
 import type { TestResult } from "@/lib/device-types";
 
 // Bounded to stay under Vercel's default (Hobby-plan) 10 s function limit; raise both this and
@@ -31,6 +32,7 @@ const OTA_STATES = ["downloading", "done", "failed"];
  *   status=unlinked
  */
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   let form: FormData;
   try {
     form = await request.formData();
@@ -86,6 +88,7 @@ export async function POST(request: Request) {
     uptime: int("uptime", 0),
     rev: int("rev", 0),
     settings: Object.keys(reported).length ? sanitizeSettings(reported, DEFAULT_SETTINGS) : null,
+    projectSupported: form.has("s.project"),
     tests,
     ota: OTA_STATES.includes(otaState)
       ? {
@@ -99,10 +102,18 @@ export async function POST(request: Request) {
     unlink: field("unlink") === "1",
   };
 
-  const waitS = Math.min(MAX_WAIT_S, Math.max(0, int("wait", 0)));
+  const waitS = Math.min(report.settings?.project === "weather" ? 4 : MAX_WAIT_S, Math.max(0, int("wait", 0)));
   const result = await syncBoard(report, waitS * 1000, request.signal);
   if (request.signal.aborted) return reply([], 499);
-  return reply(render(result));
+  const lines = render(result);
+  if (result.status === "linked" && report.settings) {
+    const settings = { ...report.settings, ...result.settings };
+    if (settings.project === "weather") {
+      const budget = Math.max(1, Math.min(4000, 8500 - (Date.now() - startedAt)));
+      lines.push(`weather=${await weatherPayload(settings, budget)}`);
+    }
+  }
+  return reply(lines);
 }
 
 function render(result: SyncResult) {

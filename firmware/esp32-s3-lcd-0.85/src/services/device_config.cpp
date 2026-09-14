@@ -6,6 +6,9 @@
 
 void DeviceConfig::Load() {
   Settings s("ui");
+  project = s.GetString("project", "none");
+  weather_lat = s.GetInt("weather_lat", weather_lat);
+  weather_lon = s.GetInt("weather_lon", weather_lon);
   sleep_seconds = s.GetInt("sleep_s", sleep_seconds);
   power_off_seconds = s.GetInt("power_off_s", power_off_seconds);
   rotate = s.GetBool("rotate", rotate);
@@ -28,6 +31,9 @@ void DeviceConfig::Load() {
 
 void DeviceConfig::Save() {
   Settings s("ui", true);
+  s.SetString("project", project);
+  s.SetInt("weather_lat", weather_lat);
+  s.SetInt("weather_lon", weather_lon);
   s.SetInt("sleep_s", sleep_seconds);
   s.SetInt("power_off_s", power_off_seconds);
   s.SetBool("rotate", rotate);

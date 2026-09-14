@@ -126,3 +126,13 @@ Release a new version:
 The script compiles the sketch, writes `public/firmware/<board>/<version>.bin` (merged image, flashed at `0x0`) and `<version>.app.bin` (for over-the-air updates), and updates `firmware/manifest.json`. Only the newest build is kept — the previous version's files are deleted and the manifest holds a single entry per board, so the site only ever offers the latest firmware.
 
 Add a board by creating `firmware/<board>/` with a sketch of the same name, `version.h` and `board.json`.
+
+## Display projects
+
+The **Projects** tab loads one display project per linked board. Projects share the base firmware and run only in the content area below the status bar; the device menu remains available. Firmware **v1.0.2 or later** is required. Update existing boards from **Devices → Details → Firmware**.
+
+- **Weather:** current temperature and conditions from [Open-Meteo](https://open-meteo.com/), cached for 10 minutes. Set latitude and longitude before loading (Berlin is the default). The board needs Wi-Fi and a connection to the console to receive weather. Failed requests show “Unavailable”; disconnected boards mark their last reading after 20 minutes.
+- **Analog clock:** hour, minute and second hands using the board’s time zone and synchronized time.
+- **Default display:** restore the base firmware’s device and connection screen.
+
+Selection and weather coordinates survive restart and firmware updates in NVS. Loading remains visible until the board reports the new project; changes queued while offline apply when the board reconnects. No database migration is needed: project state uses the existing settings synchronization.

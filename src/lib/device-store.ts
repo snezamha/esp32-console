@@ -55,6 +55,8 @@ function toPublic(row: DeviceRow): PublicDevice {
     uptime: row.uptime,
     rev: row.rev,
     settings: effectiveSettings(row),
+    activeProject: (row.reported as DeviceSettings).project ?? "none",
+    projectSupported: row.board === "esp32-s3-lcd-0.85" && Object.hasOwn(row.reported as object, "project"),
     settingsReported: row.settingsReported,
     commands: (row.commands as DeviceCommand[]).slice(-10),
     tests: row.tests as Record<string, TestResult>,
@@ -69,7 +71,7 @@ function toPublic(row: DeviceRow): PublicDevice {
 
 /** Settings as the console sees them: what the board reported plus edits still on their way. */
 function effectiveSettings(row: DeviceRow): DeviceSettings {
-  const out: Record<string, unknown> = { ...(row.reported as object) };
+  const out: Record<string, unknown> = { ...DEFAULT_SETTINGS, ...(row.reported as object) };
   for (const [key, entry] of Object.entries(row.pending as PendingEdits)) out[key] = entry!.value;
   return out as DeviceSettings;
 }
@@ -119,6 +121,7 @@ export type BoardReport = {
   rev: number;
   /** The board's current settings, already sanitized. */
   settings: DeviceSettings | null;
+  projectSupported: boolean;
   tests: Record<string, TestResult>;
   ota: Pick<OtaStatus, "state" | "progress" | "error"> | null;
   networks: string[] | null;
@@ -146,12 +149,15 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
 
   const pending = { ...(row.pending as PendingEdits) };
   for (const key of Object.keys(pending) as (keyof DeviceSettings)[]) {
-    if (pending[key]!.rev <= report.rev) delete pending[key];
+    const projectConfirmed = key !== "project" || (report.projectSupported && report.settings?.project === pending[key]!.value);
+    if (pending[key]!.rev <= report.rev && projectConfirmed) delete pending[key];
   }
   data.pending = json(pending);
 
   if (report.settings) {
-    data.reported = json(report.settings);
+    const settings: Partial<DeviceSettings> = { ...report.settings };
+    if (!report.projectSupported) delete settings.project;
+    data.reported = json(settings);
     data.settingsReported = true;
   }
 

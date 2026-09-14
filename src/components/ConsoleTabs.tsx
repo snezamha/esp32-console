@@ -5,13 +5,15 @@ import { useState } from "react";
 import { Devices } from "@/components/Devices";
 import { Flasher } from "@/components/Flasher";
 
-const TABS = ["Flash firmware", "Devices"];
+import { Projects } from "@/components/Projects";
+
+const TABS = ["Flash firmware", "Devices", "Projects"];
 
 export function ConsoleTabs() {
   const [tab, setTab] = useState(0);
   return (
     <TabGroup selectedIndex={tab} onChange={setTab} className="flex flex-1 flex-col">
-      <TabList className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-200/60 p-1 dark:bg-zinc-900">
+      <TabList className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-zinc-200/60 p-1 dark:bg-zinc-900">
         {TABS.map((name) => (
           <Tab
             key={name}
@@ -28,6 +30,9 @@ export function ConsoleTabs() {
         </TabPanel>
         <TabPanel unmount={false} className="flex flex-1 flex-col">
           <Devices active={tab === 1} />
+        </TabPanel>
+        <TabPanel unmount={false} className="flex flex-1 flex-col">
+          <Projects active={tab === 2} />
         </TabPanel>
       </TabPanels>
     </TabGroup>

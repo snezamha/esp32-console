@@ -361,6 +361,7 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
   bool has_rev = false;
   Values settings;
   std::vector<Command> commands;
+  std::string weather;
 
   size_t start = 0;
   while (start < body.size()) {
@@ -383,6 +384,8 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
     } else if (key == "rev") {
       rev = atoi(value.c_str());
       has_rev = true;
+    } else if (key == "weather") {
+      weather = value;
     } else if (key.rfind("set.", 0) == 0) {
       settings.push_back({key.substr(4), value});
     } else if (key.rfind("cmd.", 0) == 0) {
@@ -438,6 +441,7 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
       Save();
     }
     for (const auto& command : commands) HandleCommand(command);
+    if (!weather.empty() && command_handler_) command_handler_({"", "weather_data", weather});
     const bool name_changed = name != name_;
     name_ = name;
     SetState(State::Linked);

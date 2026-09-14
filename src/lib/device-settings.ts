@@ -3,6 +3,9 @@
  * the firmware understands (firmware/<board>/src/services/console_client.cpp).
  */
 export type DeviceSettings = {
+  project: "none" | "weather" | "analog-clock";
+  weather_lat: number;
+  weather_lon: number;
   volume: number;
   brightness: number;
   theme: "dark" | "light";
@@ -21,6 +24,9 @@ export type DeviceSettings = {
 };
 
 export const DEFAULT_SETTINGS: DeviceSettings = {
+  project: "none",
+  weather_lat: 525200,
+  weather_lon: 134050,
   volume: 70,
   brightness: 100,
   theme: "dark",
@@ -86,6 +92,9 @@ export function sanitizeSettings(input: Record<string, unknown>, base: DeviceSet
     if (input[key] !== undefined && options.includes(value)) out[key] = value;
   };
 
+  if (["none", "weather", "analog-clock"].includes(String(input.project))) out.project = input.project as DeviceSettings["project"];
+  num("weather_lat", -900000, 900000);
+  num("weather_lon", -1800000, 1800000);
   num("volume", 0, 100);
   num("brightness", 10, 100);
   if (input.theme === "dark" || input.theme === "light") out.theme = input.theme;

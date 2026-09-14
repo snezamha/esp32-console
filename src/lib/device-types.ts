@@ -54,6 +54,8 @@ export type PublicDevice = {
   rev: number;
   /** Board settings including console edits that are still on their way. */
   settings: DeviceSettings;
+  activeProject: DeviceSettings["project"];
+  projectSupported: boolean;
   /** False until the board uploaded its settings; until then `settings` are defaults. */
   settingsReported: boolean;
   commands: DeviceCommand[];

@@ -5,6 +5,9 @@
 // User settings, persisted in NVS (namespace "ui").
 // Theme and brightness live with the display, volume with the audio codec.
 struct DeviceConfig {
+  std::string project = "none";
+  int weather_lat = 525200;
+  int weather_lon = 134050;
   int sleep_seconds = 0;      // Screen dims after this idle time; 0 = never
   int power_off_seconds = 0;  // On battery only; 0 = never
   bool rotate = false;        // Rotate the screen 180°
