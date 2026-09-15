@@ -22,11 +22,11 @@ for (const dir of readdirSync(join(root, "projects"), {withFileTypes: true})) {
   execFileSync(gcc, ["-Os", "-nostartfiles", "-nostdlib", "-fPIC", "-shared", "-Wl,-e,app_main", "-fdata-sections", "-ffunction-sections", "-Wl,--gc-sections", "-fvisibility=hidden", "-mtext-section-literals", "-mlongcalls", "-I", join(root, "firmware/esp32-s3-lcd-0.85/src/runtime"), join(source, "main.c"), "-o", binary], {stdio: "inherit"});
   execFileSync(strip, ["--strip-unneeded", "--remove-section=.comment", "--remove-section=.got.loc", "--remove-section=.dynamic", "--remove-section=.xt.lit", "--remove-section=.xt.prop", "--remove-section=.xtensa.info", binary]);
   const metadata = join(destination, ".metadata.json");
-  writeFileSync(metadata, JSON.stringify({...meta, board: "esp32-s3-lcd-0.85", abi: 1}));
+  writeFileSync(metadata, JSON.stringify({...meta, board: "esp32-s3-lcd-0.85", abi: 2}));
   execFileSync(objcopy, ["--add-section", `.project=${metadata}`, binary]);
   unlinkSync(metadata);
   const bytes = readFileSync(binary);
-  packages.push({...meta, board: "esp32-s3-lcd-0.85", abi: 1, path: `/projects/esp32-s3-lcd-0.85/${meta.id}/${meta.version}.elf`, size: bytes.length, md5: createHash("md5").update(bytes).digest("hex"), sha256: createHash("sha256").update(bytes).digest("hex")});
+  packages.push({...meta, board: "esp32-s3-lcd-0.85", abi: 2, path: `/projects/esp32-s3-lcd-0.85/${meta.id}/${meta.version}.elf`, size: bytes.length, md5: createHash("md5").update(bytes).digest("hex"), sha256: createHash("sha256").update(bytes).digest("hex")});
   console.log(`✓ ${meta.id} v${meta.version} (${bytes.length} bytes)`);
 }
 writeFileSync(join(root, "projects/manifest.json"), JSON.stringify({projects: packages}, null, 2) + "\n");

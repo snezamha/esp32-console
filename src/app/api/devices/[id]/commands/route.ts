@@ -1,6 +1,6 @@
 import { getUser, unauthorized } from "@/lib/auth";
 import { BOARDS } from "@/lib/boards";
-import { listDevices, queueCommand, updateDevice, stopProject, retryProjectFile } from "@/lib/device-store";
+import { listDevices, queueCommand, stopProject, retryProjectFile } from "@/lib/device-store";
 import { projectPackage } from "@/lib/projects";
 import { isOtaActive } from "@/lib/device-client";
 import type { CommandType } from "@/lib/device-types";
@@ -32,21 +32,23 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
       return updated ? Response.json({ device: updated }) : Response.json({ error: "Device not found." }, { status: 404 });
     }
     case "project_install": {
-      if (body.project !== "none" && device.firmware.localeCompare("1.0.8", undefined, { numeric: true }) < 0) return bad("Update the base firmware to v1.0.8 before loading a project.");
+      if (body.project !== "none" && device.firmware.localeCompare("1.0.9", undefined, { numeric: true }) < 0) return bad("Update the base firmware to v1.0.9 before loading a project.");
       if (typeof body.retry === "string") {
-        try { const updated = await retryProjectFile(user.id, id, body.retry); return Response.json({ device: updated }, { status: 202 }); } catch (error) { return bad(error instanceof Error ? error.message : "Retry failed."); }
+        const previous = device.commands.find((command) => command.id === body.retry && command.type === "project_install");
+        if (!previous || previous.status === "queued" || previous.status === "sent") return bad("This installation cannot be retried yet.");
+        const values = new URLSearchParams(previous.arg);
+        if (values.get("path")?.startsWith("/api/devices/")) {
+          try { const updated = await retryProjectFile(user.id, id, body.retry); return Response.json({ device: updated }, { status: 202 }); } catch (error) { return bad(error instanceof Error ? error.message : "Retry failed."); }
+        }
+        body.project = values.get("id");
       }
       if (!device.projectSupported) return bad("Update the base firmware to v1.0.4 or later.");
       if (isOtaActive(device.ota) || device.commands.some((c) => c.type === "project_install" && c.status === "sent")) return bad("An installation is already running.");
       if (body.project === "none") { arg = new URLSearchParams({ id: "none" }).toString(); break; }
       const project = projectPackage(body.project, device.board);
       if (!project) return bad("Project package is not available for this board.");
-      if (project.id === "weather") {
-        if (!Number.isInteger(body.latitude) || !Number.isInteger(body.longitude) || Math.abs(body.latitude) > 900000 || Math.abs(body.longitude) > 1800000) return bad("Enter valid latitude and longitude.");
-        await updateDevice(user.id, id, { settings: { ...device.settings, weather_lat: body.latitude, weather_lon: body.longitude } });
-      }
       projectInfo = { name: project.name, version: project.version, size: project.size };
-      arg = new URLSearchParams({ id: project.id, path: project.path, abi: String(project.abi), size: String(project.size), md5: project.md5 }).toString();
+      arg = new URLSearchParams({ id: project.id, version: project.version, path: project.path, abi: String(project.abi), size: String(project.size), md5: project.md5, sha256: project.sha256 }).toString();
       break;
     }
     case "restart":
@@ -74,6 +76,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
         version: version.version,
         size: String(version.app.size),
         md5: version.app.md5,
+        sha256: version.app.sha256,
       }).toString();
       otaVersion = version.version;
       break;

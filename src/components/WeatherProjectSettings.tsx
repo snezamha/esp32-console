@@ -2,8 +2,10 @@
 import { Button } from "@headlessui/react";
 import { useEffect, useRef, useState } from "react";
 import { ErrorText, inputClass, secondaryButton } from "@/components/ui";
+import type { ProjectLocation } from "@/lib/project-config";
 type Location = { id: number; name: string; country: string; region: string; latitude: number; longitude: number; timezone: string };
-export function WeatherProjectSettings({ lat, lon, unit, onCoordinates, onUnit }: { lat: string; lon: string; unit: "celsius" | "fahrenheit"; onCoordinates: (lat: string, lon: string) => void; onUnit: (unit: "celsius" | "fahrenheit") => void }) {
+export function WeatherProjectSettings({ value, onChange }: { value: ProjectLocation; onChange: (location: ProjectLocation) => void }) {
+  const lat = String(value.latitude), lon = String(value.longitude);
   const [query, setQuery] = useState("");
   const [locations, setLocations] = useState<Location[]>([]);
   const [searching, setSearching] = useState(false);
@@ -29,14 +31,14 @@ export function WeatherProjectSettings({ lat, lon, unit, onCoordinates, onUnit }
     }, 350);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [query]);
-  const coordinates = (a: string, b: string, name: string) => { positionRevision.current++; onCoordinates(a, b); setLabel(name); };
+  const coordinates = (a: string, b: string, name: string) => { positionRevision.current++; onChange({ latitude: Number(a), longitude: Number(b), label: name }); setLabel(name); };
   const locate = () => {
     setError(null);
     if (!window.isSecureContext || !navigator.geolocation) { setError("Location requires HTTPS and a browser with location support. You can search for your city instead."); return; }
     setLocating(true); const revision = ++positionRevision.current;
     navigator.geolocation.getCurrentPosition((position) => {
       if (!mounted.current || revision !== positionRevision.current) return;
-      onCoordinates(position.coords.latitude.toFixed(4), position.coords.longitude.toFixed(4));
+      onChange({ latitude: Number(position.coords.latitude.toFixed(4)), longitude: Number(position.coords.longitude.toFixed(4)), label: "Current location" });
       setLabel(`Current location · accuracy ±${Math.round(position.coords.accuracy)} m`); setLocating(false);
     }, (failure) => {
       if (!mounted.current || revision !== positionRevision.current) return;
@@ -53,7 +55,6 @@ export function WeatherProjectSettings({ lat, lon, unit, onCoordinates, onUnit }
     <ErrorText>{error}</ErrorText>
     {label && <p role="status" className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">{label}</p>}
     <details><summary className="cursor-pointer text-xs">Precise coordinates</summary><div className="mt-3 grid grid-cols-2 gap-2"><label className="text-xs">Latitude<input type="number" min="-90" max="90" step="0.0001" value={lat} onChange={(e) => { coordinates(e.target.value, lon, "Custom coordinates"); setLocating(false); }} className={inputClass} /></label><label className="text-xs">Longitude<input type="number" min="-180" max="180" step="0.0001" value={lon} onChange={(e) => { coordinates(lat, e.target.value, "Custom coordinates"); setLocating(false); }} className={inputClass} /></label></div></details>
-    <label className="block space-y-1 text-xs">Temperature unit<select value={unit} onChange={(e) => onUnit(e.target.value as typeof unit)} className={inputClass}><option value="celsius">Celsius · °C</option><option value="fahrenheit">Fahrenheit · °F</option></select></label>
     <p className="text-xs text-zinc-500">Selected coordinates: {lat}, {lon}. Weather refreshes from cached readings every 10 minutes. <a href="https://open-meteo.com/en/docs/geocoding-api" target="_blank" rel="noreferrer" className="underline">Location data: Open-Meteo / GeoNames</a>.</p>
   </div>;
 }

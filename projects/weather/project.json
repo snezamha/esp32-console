@@ -1,6 +1,16 @@
 {
   "id": "weather",
   "name": "Weather",
-  "version": "1.0.1",
-  "description": "Current temperature and conditions for your chosen location."
+  "version": "1.1.0",
+  "description": "Current conditions, feels-like temperature, humidity, wind and today’s range.",
+  "category": "Information",
+  "icon": "weather",
+  "accent": "#0ea5e9",
+  "minimumFirmware": "1.0.9",
+  "capabilities": ["internet", "location"],
+  "settings": [
+    { "key": "location", "type": "location", "label": "Location", "default": { "latitude": 52.52, "longitude": 13.405 } },
+    { "key": "unit", "type": "select", "label": "Temperature unit", "default": "celsius", "options": [{ "value": "celsius", "label": "Celsius · °C" }, { "value": "fahrenheit", "label": "Fahrenheit · °F" }] },
+    { "key": "details", "type": "boolean", "label": "Rotate humidity, wind and today’s range", "default": true }
+  ]
 }

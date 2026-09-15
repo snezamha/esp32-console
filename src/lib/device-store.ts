@@ -3,6 +3,7 @@ import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { Device as DeviceRow, Pairing as PairingRow, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { DEFAULT_SETTINGS, type DeviceSettings } from "@/lib/device-settings";
+import { projectConfigsWithDefaults, type ProjectConfigs } from "@/lib/project-config";
 import type {
   CommandType,
   DeviceCommand,
@@ -21,7 +22,7 @@ const SAMPLE_INTERVAL_MS = 60 * 1000;
 const MAX_SAMPLES = 24 * 60;
 const MAX_COMMANDS = 20;
 /** How often a held request re-checks the database while waiting for a change. */
-const POLL_INTERVAL_MS = 800;
+const POLL_INTERVAL_MS = 1500;
 /** Commands the board confirms with an explicit ack; the rest are done once delivered. */
 const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install", "project_stop"];
 
@@ -40,6 +41,7 @@ function sleep(ms: number, signal: AbortSignal) {
 
 function toPublic(row: DeviceRow): PublicDevice {
   const pending = row.pending as PendingEdits;
+  const settings = effectiveSettings(row);
   return {
     id: row.id,
     name: row.name,
@@ -55,11 +57,16 @@ function toPublic(row: DeviceRow): PublicDevice {
     heap: row.heap,
     uptime: row.uptime,
     rev: row.rev,
-    settings: effectiveSettings(row),
+    settings,
+    projectSettings: projectConfigsWithDefaults(row.projectSettings, settings),
     activeProject: (row.reported as DeviceSettings).project ?? "none",
-    projectSupported: row.board === "esp32-s3-lcd-0.85" && (row.reported as Record<string, unknown>)._project_api === 1,
+    projectSupported: row.board === "esp32-s3-lcd-0.85" && Number((row.reported as Record<string, unknown>)._project_api) >= 1,
+    projectApi: Number((row.reported as Record<string, unknown>)._project_api) || 0,
+    activeProjectVersion: String((row.reported as Record<string, unknown>)._project_version ?? ""),
+    activeProjectSha256: String((row.reported as Record<string, unknown>)._project_sha256 ?? ""),
+    projectSafeMode: (row.reported as Record<string, unknown>)._project_safe === 1,
     settingsReported: row.settingsReported,
-    commands: expireProjectCommands(row.commands as DeviceCommand[]).slice(-10).map((entry) => { const command = { ...entry }; delete command.file; return command; }),
+    commands: expireProjectCommands(row.commands as DeviceCommand[]).slice(-10).map((entry) => { const command = { ...entry }; delete command.fileId; return command; }),
     tests: row.tests as Record<string, TestResult>,
     testsUpdatedAt: row.testsUpdatedAt?.getTime() ?? 0,
     samples: row.samples as DeviceSample[],
@@ -122,7 +129,10 @@ export type BoardReport = {
   rev: number;
   /** The board's current settings, already sanitized. */
   settings: DeviceSettings | null;
-  projectSupported: boolean;
+  projectApi: number;
+  projectVersion: string;
+  projectSha256: string;
+  projectSafeMode: boolean;
   tests: Record<string, TestResult>;
   ota: Pick<OtaStatus, "state" | "progress" | "error"> | null;
   networks: string[] | null;
@@ -153,7 +163,7 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
 
   const pending = { ...(row.pending as PendingEdits) };
   for (const key of Object.keys(pending) as (keyof DeviceSettings)[]) {
-    if (key === "project" && report.projectSupported) { delete pending[key]; continue; } // Clear obsolete built-in selections after upgrade.
+    if (key === "project" && report.projectApi >= 1) { delete pending[key]; continue; } // Clear obsolete built-in selections after upgrade.
     const projectConfirmed = key !== "project" || report.settings?.project === pending[key]!.value;
     if (pending[key]!.rev <= report.rev && projectConfirmed) delete pending[key];
   }
@@ -161,13 +171,16 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
 
   if (report.settings) {
     const settings: Partial<DeviceSettings> = { ...report.settings };
-    if (!report.projectSupported) delete settings.project;
+    if (report.projectApi < 1) delete settings.project;
     data.reported = json({ ...settings,
       weather_lat: (row.reported as DeviceSettings).weather_lat ?? DEFAULT_SETTINGS.weather_lat,
       weather_lon: (row.reported as DeviceSettings).weather_lon ?? DEFAULT_SETTINGS.weather_lon,
       weather_unit: (row.reported as DeviceSettings).weather_unit ?? "celsius",
       project_seconds: (row.reported as DeviceSettings).project_seconds ?? true,
-      _project_api: report.projectSupported ? 1 : 0,
+      _project_api: report.projectApi,
+      _project_version: report.projectVersion,
+      _project_sha256: report.projectSha256,
+      _project_safe: report.projectSafeMode ? 1 : 0,
     });
     data.settingsReported = true;
   }
@@ -389,7 +402,7 @@ export async function claimCode(owner: string, code: string): Promise<PublicDevi
 export async function updateDevice(
   owner: string,
   id: string,
-  patch: { name?: string; settings?: DeviceSettings },
+  patch: { name?: string; settings?: DeviceSettings; projectSettings?: { project: string; values: ProjectConfigs[string] } },
 ): Promise<PublicDevice | null> {
   const owned = await db.device.findFirst({ where: { id, owner }, select: { id: true } });
   if (!owned) return null;
@@ -397,9 +410,9 @@ export async function updateDevice(
   const row = await mutateDevice(id, (current) => {
     if (current.owner !== owner) return null;
     const data: Prisma.DeviceUpdateInput = {};
+    const currentSettings = effectiveSettings(current);
     if (patch.name !== undefined && patch.name !== current.name) data.name = patch.name;
     if (patch.settings) {
-      const currentSettings = effectiveSettings(current);
       const pending = { ...(current.pending as PendingEdits) };
       let changed = false;
       for (const key of Object.keys(patch.settings) as (keyof DeviceSettings)[]) {
@@ -417,6 +430,10 @@ export async function updateDevice(
         data.rev = current.rev + 1;
       }
     }
+    if (patch.projectSettings) {
+      const currentProjects = projectConfigsWithDefaults(current.projectSettings, currentSettings);
+      data.projectSettings = json({ ...currentProjects, [patch.projectSettings.project]: patch.projectSettings.values });
+    }
     return Object.keys(data).length ? data : null;
   });
   return row ? toPublic(row) : null;
@@ -428,13 +445,24 @@ export async function queueCommand(
   type: CommandType,
   arg: string,
   otaVersion = "",
-  project?: { name: string; version: string; size: number; file?: string },
+  project?: { name: string; version: string; size: number; bytes?: Buffer; fileId?: string },
 ): Promise<PublicDevice | null> {
   const owned = await db.device.findFirst({ where: { id, owner }, select: { id: true } });
   if (!owned) return null;
   const now = Date.now();
+  let fileId = project?.fileId;
+  let createdFile = false;
+  if (project?.bytes) {
+    const stored = await db.projectFile.create({
+      data: { deviceId: id, name: project.name, version: project.version, bytes: Uint8Array.from(project.bytes) },
+      select: { id: true },
+    });
+    fileId = stored.id;
+    createdFile = true;
+  }
 
-  const row = await mutateDevice(id, (current) => {
+  let row: DeviceRow | null;
+  try { row = await mutateDevice(id, (current) => {
     if (current.owner !== owner) return null;
     let commands = expireProjectCommands(current.commands as DeviceCommand[]);
     if ((type === "project_install" || type === "ota") && commands.some((c) =>
@@ -444,7 +472,7 @@ export async function queueCommand(
     // A newer command of the same kind replaces one that has not been delivered yet.
     commands = commands.filter((c) => !(c.status === "queued" && c.type === type));
     const commandId = randomBytes(4).toString("hex");
-    if (project?.file) {
+    if (fileId) {
       const values = new URLSearchParams(arg);
       values.set("path", `/api/devices/${id}/projects/${commandId}/file`);
       arg = values.toString();
@@ -452,7 +480,7 @@ export async function queueCommand(
     commands = [
       ...commands,
       { id: commandId, type, arg, status: "queued" as const, result: "", createdAt: now, updatedAt: now,
-        ...(type === "project_install" ? { transfer: { phase: "queued" as const, progress: 0, bytes: 0, total: project?.size ?? 0, name: project?.name ?? "Default display", version: project?.version ?? "", logs: [{ seq: -now, at: now, level: "info" as const, message: "Installation requested. Waiting for the board to accept the file." }] }, ...(project?.file ? { file: project.file } : {}) } : {}),
+        ...(type === "project_install" ? { transfer: { phase: "queued" as const, progress: 0, bytes: 0, total: project?.size ?? 0, name: project?.name ?? "Default display", version: project?.version ?? "", logs: [{ seq: -now, at: now, level: "info" as const, message: "Installation requested. Waiting for the board to accept the file." }] }, ...(fileId ? { fileId } : {}) } : {}),
       },
     ].slice(-MAX_COMMANDS);
     const data: Prisma.DeviceUpdateInput = { commands: json(commands) };
@@ -461,8 +489,17 @@ export async function queueCommand(
       data.ota = json(ota);
     }
     return data;
-  });
-  return row ? toPublic(row) : null;
+  }); } catch (error) {
+    if (createdFile && fileId) await db.projectFile.delete({ where: { id: fileId } }).catch(() => {});
+    throw error;
+  }
+  if (!row) {
+    if (createdFile && fileId) await db.projectFile.delete({ where: { id: fileId } }).catch(() => {});
+    return null;
+  }
+  const retainedFiles = (row.commands as DeviceCommand[]).flatMap((command) => command.fileId ? [command.fileId] : []);
+  await db.projectFile.deleteMany({ where: { deviceId: id, ...(retainedFiles.length ? { id: { notIn: retainedFiles } } : {}) } });
+  return toPublic(row);
 }
 
 /** Removes the device. Its board loses the token on its next check-in and gets a new code. */
@@ -474,25 +511,28 @@ export async function removeDevice(owner: string, id: string): Promise<boolean> 
 // ---------------------------------------------------------------------------
 // Live updates for the panel (server-sent events)
 
-/** Polls the owner's devices for a change (any row's `version`/count) and returns the fresh list. */
+/** A compact change token, so a held stream does not deserialize settings, logs and samples on
+ * every database check. */
+export async function deviceRowsSignature(owner: string) {
+  const rows = await db.device.findMany({ where: { owner }, orderBy: { createdAt: "asc" }, select: { id: true, version: true } });
+  return rows.map((row) => `${row.id}:${row.version}`).join(",");
+}
+
+/** Polls compact row versions and fetches full devices only after a change or timeout. */
 export async function waitForChange(owner: string, signature: string, ms: number, signal: AbortSignal): Promise<PublicDevice[]> {
   const deadline = Date.now() + ms;
   for (;;) {
-    const devices = await listDevices(owner);
-    if (rowsSignature(devices) !== signature || Date.now() >= deadline || signal.aborted) return devices;
+    if (await deviceRowsSignature(owner) !== signature || Date.now() >= deadline || signal.aborted) return listDevices(owner);
     await sleep(Math.min(POLL_INTERVAL_MS, deadline - Date.now()), signal);
   }
 }
 
-export function rowsSignature(devices: PublicDevice[]) {
-  return devices.map((d) => `${d.id}:${d.rev}:${d.lastSeen}:${d.commands.length}`).join(",");
-}
-
-/** Project configuration stays in the console; no project-specific fields are sent to the base. */
-export async function weatherSettingsForBoard(token: string): Promise<DeviceSettings | null> {
+/** Project configuration stays in the console and is sent only as the active module's data payload. */
+export async function projectSettingsForBoard(token: string, project: string): Promise<ProjectConfigs[string] | null> {
   if (!token) return null;
   const row = await db.device.findUnique({ where: { token } });
-  return row ? effectiveSettings(row) : null;
+  if (!row) return null;
+  return projectConfigsWithDefaults(row.projectSettings, effectiveSettings(row))[project] ?? null;
 }
 
 export async function stopProject(owner: string, id: string, target: string): Promise<PublicDevice | null> {
@@ -512,23 +552,28 @@ export async function stopProject(owner: string, id: string, target: string): Pr
 export async function projectFileForBoard(id: string, commandId: string, token: string): Promise<Buffer | null> {
   const row = await db.device.findFirst({ where: { id, token } });
   const command = (row?.commands as DeviceCommand[] | undefined)?.find((command) => command.id === commandId && command.type === "project_install");
-  return command?.file ? Buffer.from(command.file, "base64") : null;
+  if (!command?.fileId) return null;
+  const file = await db.projectFile.findFirst({ where: { id: command.fileId, deviceId: id }, select: { bytes: true } });
+  return file ? Buffer.from(file.bytes) : null;
 }
 
 export async function retryProjectFile(owner: string, id: string, target: string): Promise<PublicDevice | null> {
   const row = await db.device.findFirst({ where: { id, owner } });
   const command = (row?.commands as DeviceCommand[] | undefined)?.find((entry) => entry.id === target && entry.type === "project_install");
-  if (!command?.file || !command.transfer || projectPending(command)) throw new Error("Choose the project file again to retry.");
-  return queueCommand(owner, id, "project_install", command.arg, "", { name: command.transfer.name, version: command.transfer.version, size: command.transfer.total, file: command.file });
+  if (!command?.fileId || !command.transfer || projectPending(command)) throw new Error("Choose the project file again to retry.");
+  return queueCommand(owner, id, "project_install", command.arg, "", { name: command.transfer.name, version: command.transfer.version, size: command.transfer.total, fileId: command.fileId });
 }
 
 /** Deletes completed project requests/logs; leaves installed projects and pending work intact. */
 export async function clearProjectHistory(owner: string, id: string): Promise<PublicDevice | null> {
+  let deletedFileIds: string[] = [];
   const row = await mutateDevice(id, (current) => {
     if (current.owner !== owner) return null;
     const history = expireProjectCommands(current.commands as DeviceCommand[]);
     const commands = history.filter((command) => !command.type.startsWith("project_") || projectPending(command) || history.some((stop) => stop.type === "project_stop" && stop.arg === command.id && projectPending(stop)));
+    deletedFileIds = history.filter((command) => !commands.includes(command) && command.fileId).map((command) => command.fileId!);
     return { commands: json(commands) };
   });
+  if (row?.owner === owner && deletedFileIds.length) await db.projectFile.deleteMany({ where: { id: { in: deletedFileIds }, deviceId: id } });
   return row?.owner === owner ? toPublic(row) : null;
 }

@@ -5,6 +5,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_random.h>
+#include <esp_ota_ops.h>
+#include <mbedtls/sha256.h>
 
 #include <algorithm>
 
@@ -69,6 +71,16 @@ std::string UrlDecode(const std::string& value) {
   return out;
 }
 
+std::string HexDigest(const uint8_t* digest, size_t length) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out(length * 2, '0');
+  for (size_t i = 0; i < length; ++i) {
+    out[i * 2] = kHex[digest[i] >> 4];
+    out[i * 2 + 1] = kHex[digest[i] & 15];
+  }
+  return out;
+}
+
 std::string MacAddress() {
   const uint64_t mac = ESP.getEfuseMac();
   char buf[18];
@@ -119,6 +131,9 @@ void ConsoleClient::Begin() {
   token_ = s.GetString("token", "");
   rev_ = s.GetInt("rev", 0);
   NewSecret();
+  esp_ota_img_states_t image_state;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  ota_validation_pending_ = running && esp_ota_get_state_partition(running, &image_state) == ESP_OK && image_state == ESP_OTA_IMG_PENDING_VERIFY;
   SetState(server_.empty() ? State::Off : State::Offline);
 }
 
@@ -217,6 +232,14 @@ std::string ConsoleClient::ServerHost() const {
 // Requests
 
 void ConsoleClient::Loop(uint32_t now_ms) {
+  // With bootloader rollback enabled, a newly installed image remains provisional until it has
+  // kept the full application loop alive for 30 seconds. A crash before this point rolls back.
+  if (ota_validation_pending_ && now_ms >= 30000) {
+    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+      ota_validation_pending_ = false;
+      Serial.println("{\"console\":\"firmware image validated\"}");
+    }
+  }
   for (const auto& project_ack : ProjectRuntime::Get().Loop()) { acks_.push_back(project_ack); Changed(); }
   if (poll_.done) {
     poll_.done = false;
@@ -502,9 +525,14 @@ void ConsoleClient::StartOta(const Command& command) {
   }
   ota_url_ = server_ + FormValue(command.arg, "path");
   ota_md5_ = FormValue(command.arg, "md5");
+  ota_sha256_ = FormValue(command.arg, "sha256");
   ota_version_ = FormValue(command.arg, "version");
   ota_size_ = strtoul(FormValue(command.arg, "size").c_str(), nullptr, 10);
   ota_command_id_ = command.id;
+  if (ota_md5_.size() != 32 || ota_sha256_.size() != 64 || !ota_size_) {
+    acks_.push_back(command.id + "|fail|Invalid update identity");
+    return;
+  }
   ota_error_.clear();
   ota_ok_ = false;
   ota_progress_ = 0;
@@ -549,6 +577,10 @@ void ConsoleClient::OtaTask(void* arg) {
       if (!self->ota_md5_.empty()) Update.setMD5(self->ota_md5_.c_str());
       NetworkClient* stream = http.getStreamPtr();
       uint8_t buffer[4096];
+      uint8_t digest[32];
+      mbedtls_sha256_context sha;
+      mbedtls_sha256_init(&sha);
+      bool sha_ok = mbedtls_sha256_starts(&sha, 0) == 0;
       size_t written = 0;
       uint32_t last_data = millis();
       while (written < static_cast<size_t>(length)) {
@@ -560,13 +592,19 @@ void ConsoleClient::OtaTask(void* arg) {
         }
         const int read = stream->readBytes(buffer, std::min(available, sizeof(buffer)));
         if (read <= 0) continue;
+        if (sha_ok) sha_ok = mbedtls_sha256_update(&sha, buffer, read) == 0;
         if (Update.write(buffer, read) != static_cast<size_t>(read)) break;
         written += read;
         last_data = millis();
         self->ota_progress_ = static_cast<int>(written * 100 / length);
       }
+      if (sha_ok) sha_ok = mbedtls_sha256_finish(&sha, digest) == 0;
+      mbedtls_sha256_free(&sha);
       if (written != static_cast<size_t>(length)) {
         error = Update.hasError() ? Update.errorString() : "Download interrupted";
+        Update.abort();
+      } else if (!sha_ok || HexDigest(digest, sizeof(digest)) != self->ota_sha256_) {
+        error = "Firmware SHA-256 mismatch";
         Update.abort();
       } else if (!Update.end()) {
         error = std::string("Verification failed: ") + Update.errorString();

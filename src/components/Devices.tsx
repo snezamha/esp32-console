@@ -42,19 +42,25 @@ export function Devices({ active }: { active: boolean }) {
   useEffect(() => {
     if (!active || !user) return;
     let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    let failures = 0;
     const open = () => {
+      if (stopped) return;
       source?.close();
       source = new EventSource("/api/devices/stream");
       source.addEventListener("devices", (event) => {
         setDevices(JSON.parse((event as MessageEvent).data));
+        failures = 0;
         setConnection("live");
       });
-      // Each request is short-lived by design (see the route); a normal close reconnects.
+      // The endpoint intentionally closes each short request. Reopen quietly; only surface a
+      // warning after repeated requests fail without yielding any device snapshot.
       source.onerror = () => {
-        setConnection("retrying");
-        setTimeout(() => {
-          if (document.visibilityState === "visible") open();
-        }, 500);
+        source?.close();
+        failures += 1;
+        if (failures >= 3) setConnection("retrying");
+        retryTimer = setTimeout(() => { if (document.visibilityState === "visible") open(); }, Math.min(4000, 500 * failures));
       };
     };
     const onVisibility = () => {
@@ -64,6 +70,8 @@ export function Devices({ active }: { active: boolean }) {
     open();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
       source?.close();
       document.removeEventListener("visibilitychange", onVisibility);
     };

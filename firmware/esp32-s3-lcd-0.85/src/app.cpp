@@ -185,6 +185,7 @@ void App::Start() {
   display->SetStatus("");
   display->UpdateStatusBar(true);
   display->Loop();  // Splash while the backlight fades in
+  if (ProjectRuntime::Get().SafeMode()) display->ShowNotification("Project safe mode", 6000);
 
   menu_.on_change = [this]() {
     Board::GetInstance().SetMenuOpen(menu_.IsOpen());
@@ -1179,7 +1180,10 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
-  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=1";
+  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=2";
+  body += "&project_version=" + ProjectRuntime::Get().Version();
+  body += "&project_sha256=" + ProjectRuntime::Get().Sha256();
+  body += "&project_safe=" + std::string(ProjectRuntime::Get().SafeMode() ? "1" : "0");
   for (size_t pos = 0; (pos = body.find('/', pos)) != std::string::npos;) body.replace(pos, 1, "%2F");
 
   const auto networks = Network::GetInstance().SavedNetworks();

@@ -1,6 +1,7 @@
 import { getUser, unauthorized } from "@/lib/auth";
 import { DEFAULT_SETTINGS, sanitizeSettings } from "@/lib/device-settings";
 import { listDevices, removeDevice, updateDevice } from "@/lib/device-store";
+import { sanitizeProjectConfig } from "@/lib/project-config";
 
 /** Renames the device and/or changes its settings. Only settings that differ are sent to the board. */
 export async function PATCH(request: Request, ctx: RouteContext<"/api/devices/[id]">) {
@@ -22,8 +23,19 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/devices/[i
     body.settings && typeof body.settings === "object"
       ? sanitizeSettings(body.settings, { ...DEFAULT_SETTINGS, ...current.settings })
       : undefined;
+  let projectSettings;
+  if (typeof body.project === "string" && body.projectSettings && typeof body.projectSettings === "object") {
+    try {
+      projectSettings = {
+        project: body.project,
+        values: sanitizeProjectConfig(body.project, body.projectSettings, current.projectSettings[body.project]),
+      };
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "Invalid project settings." }, { status: 400 });
+    }
+  }
 
-  const device = await updateDevice(user.id, id, { name, settings });
+  const device = await updateDevice(user.id, id, { name, settings, projectSettings });
   if (!device) return Response.json({ error: "Device not found." }, { status: 404 });
   return Response.json({ device });
 }

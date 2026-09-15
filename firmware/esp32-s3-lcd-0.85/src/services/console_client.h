@@ -141,6 +141,7 @@ class ConsoleClient {
   int ota_shown_progress_ = -1;
   std::string ota_url_;
   std::string ota_md5_;
+  std::string ota_sha256_;
   std::string ota_version_;
   std::string ota_command_id_;
   size_t ota_size_ = 0;
@@ -152,6 +153,7 @@ class ConsoleClient {
   int ota_reported_progress_ = -1;
   // Set while the "done"/"failed" ack has not been delivered yet.
   std::string ota_pending_ack_id_;
+  bool ota_validation_pending_ = false;
 
   std::function<std::string()> state_provider_;
   std::function<std::string()> telemetry_provider_;

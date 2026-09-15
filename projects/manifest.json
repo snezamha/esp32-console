@@ -3,26 +3,110 @@
     {
       "id": "analog-clock",
       "name": "Analog clock",
-      "version": "1.0.1",
-      "description": "A live clock using the board’s configured time zone.",
+      "version": "1.1.0",
+      "description": "A configurable analog clock with date and multiple dial styles.",
+      "category": "Clock",
+      "icon": "clock",
+      "accent": "#8b5cf6",
+      "minimumFirmware": "1.0.9",
+      "capabilities": [
+        "time"
+      ],
+      "settings": [
+        {
+          "key": "timezone",
+          "type": "timezone",
+          "label": "Time zone",
+          "default": "Europe/Berlin"
+        },
+        {
+          "key": "seconds",
+          "type": "boolean",
+          "label": "Show second hand",
+          "default": true
+        },
+        {
+          "key": "date",
+          "type": "boolean",
+          "label": "Show date",
+          "default": true
+        },
+        {
+          "key": "style",
+          "type": "select",
+          "label": "Dial style",
+          "default": "ticks",
+          "options": [
+            {
+              "value": "ticks",
+              "label": "Hour ticks"
+            },
+            {
+              "value": "minimal",
+              "label": "Minimal"
+            }
+          ]
+        }
+      ],
       "board": "esp32-s3-lcd-0.85",
-      "abi": 1,
-      "path": "/projects/esp32-s3-lcd-0.85/analog-clock/1.0.1.elf",
-      "size": 1796,
-      "md5": "37636f7b2600ce12cb522a4133394ae4",
-      "sha256": "a33c333280be81e19ffca8b05580bb85d5fa775df250ce59b86fc9d230ba9e09"
+      "abi": 2,
+      "path": "/projects/esp32-s3-lcd-0.85/analog-clock/1.1.0.elf",
+      "size": 2476,
+      "md5": "f9154cc557178e719abd96a3d1e8ac43",
+      "sha256": "ee6c1de11a2af318cbd7e71e4a9c0837cbd26e3f1c73558203422d1eaa72364c"
     },
     {
       "id": "weather",
       "name": "Weather",
-      "version": "1.0.1",
-      "description": "Current temperature and conditions for your chosen location.",
+      "version": "1.1.0",
+      "description": "Current conditions, feels-like temperature, humidity, wind and today’s range.",
+      "category": "Information",
+      "icon": "weather",
+      "accent": "#0ea5e9",
+      "minimumFirmware": "1.0.9",
+      "capabilities": [
+        "internet",
+        "location"
+      ],
+      "settings": [
+        {
+          "key": "location",
+          "type": "location",
+          "label": "Location",
+          "default": {
+            "latitude": 52.52,
+            "longitude": 13.405
+          }
+        },
+        {
+          "key": "unit",
+          "type": "select",
+          "label": "Temperature unit",
+          "default": "celsius",
+          "options": [
+            {
+              "value": "celsius",
+              "label": "Celsius · °C"
+            },
+            {
+              "value": "fahrenheit",
+              "label": "Fahrenheit · °F"
+            }
+          ]
+        },
+        {
+          "key": "details",
+          "type": "boolean",
+          "label": "Rotate humidity, wind and today’s range",
+          "default": true
+        }
+      ],
       "board": "esp32-s3-lcd-0.85",
-      "abi": 1,
-      "path": "/projects/esp32-s3-lcd-0.85/weather/1.0.1.elf",
-      "size": 1340,
-      "md5": "3a4c38631d9e2fadc123c533121a9038",
-      "sha256": "af5cedd61341b6a2416b4a00bb92a4d7e8f5b749606da87487d66c90bba01fd0"
+      "abi": 2,
+      "path": "/projects/esp32-s3-lcd-0.85/weather/1.1.0.elf",
+      "size": 2024,
+      "md5": "e81e3f1109e0cd1df962fb3d7751ad87",
+      "sha256": "62f3eb4d5bcd018362d26fcfe2527751e0f8b4eb948bf3b24923266a1a2c9e19"
     }
   ]
 }

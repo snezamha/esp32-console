@@ -1,5 +1,6 @@
 import type { ProjectTransfer } from "@/lib/project-transfers";
 import type { DeviceSettings } from "@/lib/device-settings";
+import type { ProjectConfigs } from "@/lib/project-config";
 
 /**
  * Commands the console can send. The firmware receives `cmd.<id>.<type>=<url-encoded arg>`.
@@ -18,8 +19,8 @@ export type DeviceCommand = {
   type: CommandType;
   arg: string;
   transfer?: ProjectTransfer;
-  /** Server-only uploaded file; stripped from public responses. */
-  file?: string;
+  /** Server-only reference to an uploaded binary; stripped from public responses. */
+  fileId?: string;
   /** queued → sent (delivered, waiting for the board's ack) → done | failed */
   status: "queued" | "sent" | "done" | "failed";
   result: string;
@@ -58,7 +59,12 @@ export type PublicDevice = {
   rev: number;
   /** Board settings including console edits that are still on their way. */
   settings: DeviceSettings;
+  projectSettings: ProjectConfigs;
   activeProject: DeviceSettings["project"];
+  activeProjectVersion: string;
+  activeProjectSha256: string;
+  projectSafeMode: boolean;
+  projectApi: number;
   projectSupported: boolean;
   /** False until the board uploaded its settings; until then `settings` are defaults. */
   settingsReported: boolean;

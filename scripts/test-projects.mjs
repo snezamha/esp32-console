@@ -11,6 +11,21 @@ await assert.rejects(() => inspectProjectUpload({ size: 128 * 1024 + 1, arrayBuf
 assert.equal(uploadReads, 0, "Oversized browser files must be rejected before reading");
 await assert.rejects(() => inspectProjectUpload({ size: 0, arrayBuffer: async () => new ArrayBuffer(0) }), /between 1 byte/);
 const manifest = JSON.parse(readFileSync("projects/manifest.json", "utf8"));
+const deviceSettingsModule = await moduleFrom("src/lib/device-settings.ts");
+globalThis.__projectConfigTest = { manifest, TIME_ZONES: deviceSettingsModule.TIME_ZONES };
+let configSource = ts.transpileModule(readFileSync("src/lib/project-config.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+configSource = configSource.replace(/import manifest from .*;/, "const { manifest } = globalThis.__projectConfigTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { TIME_ZONES } = globalThis.__projectConfigTest;");
+const projectConfig = await import(`data:text/javascript;base64,${Buffer.from(configSource).toString("base64")}`);
+const weatherConfig = projectConfig.sanitizeProjectConfig("weather", { unit: "kelvin", details: false, location: { latitude: 1000, longitude: 13 } });
+assert.equal(weatherConfig.unit, "celsius", "Invalid select values must fall back to the manifest default");
+assert.equal(weatherConfig.details, false);
+assert.deepEqual(weatherConfig.location, { latitude: 52.52, longitude: 13.405 }, "Invalid coordinates must not reach the weather service");
+const clockConfig = projectConfig.sanitizeProjectConfig("analog-clock", { timezone: "Invalid/Zone", style: "minimal", seconds: "yes" });
+assert.equal(clockConfig.timezone, "Europe/Berlin");
+assert.equal(clockConfig.style, "minimal");
+assert.equal(clockConfig.seconds, true);
+assert.throws(() => projectConfig.sanitizeProjectConfig("missing", {}), /Unknown project/);
+delete globalThis.__projectConfigTest;
 for (const project of manifest.projects) {
   const file = readFileSync(`public${project.path}`);
   const identity = inspectProject(file);
@@ -39,9 +54,11 @@ assert.equal(expireProjectCommands([cancelled], now)[0], cancelled);
 assert.equal(base.status, "queued", "Expiration must not mutate persisted rows");
 console.log("✓ Standalone file identity, invalid files, offline expiration and cancellation checks passed");
 // Exercise actual persistence/delivery code with an in-memory Prisma device delegate.
-const { DEFAULT_SETTINGS } = await moduleFrom("src/lib/device-settings.ts");
+const { DEFAULT_SETTINGS } = deviceSettingsModule;
 let row = { id: "board", owner: "owner", token: "board-secret", name: "Test", mac: "00:00:00:00:00:00", board: "esp32-s3-lcd-0.85", firmware: "1.0.5", createdAt: new Date(), lastSeen: new Date(), reported: { ...DEFAULT_SETTINGS, _project_api: 1 }, pending: {}, version: 0, rev: 0, settingsReported: true, commands: [], samples: [], tests: {}, networks: [], ota: null, uptime: 10 };
 const matches = (where) => Object.entries(where).every(([key, value]) => row[key] === value);
+const storedFiles = new Map();
+let nextFileId = 0;
 const db = { device: {
   findUnique: async ({ where }) => matches(where) ? structuredClone(row) : null,
   findUniqueOrThrow: async () => structuredClone(row),
@@ -51,27 +68,33 @@ const db = { device: {
     if (!matches(where)) return { count: 0 };
     const version = row.version + 1; row = { ...row, ...structuredClone(data), version }; return { count: 1 };
   },
+}, projectFile: {
+  create: async ({ data }) => { const id = `file-${++nextFileId}`; storedFiles.set(id, { ...data, id }); return { id }; },
+  findFirst: async ({ where }) => { const value = storedFiles.get(where.id); return value?.deviceId === where.deviceId ? value : null; },
+  delete: async ({ where }) => { storedFiles.delete(where.id); },
+  deleteMany: async ({ where }) => { let count = 0; for (const [id, file] of storedFiles) if (file.deviceId === where.deviceId && (!where.id?.in || where.id.in.includes(id)) && (!where.id?.notIn || !where.id.notIn.includes(id))) { storedFiles.delete(id); count++; } return { count }; },
 } };
-globalThis.__projectTest = { db, DEFAULT_SETTINGS, expireProjectCommands, projectPending: (c) => !!c && ["sent", "queued"].includes(c.status) };
+globalThis.__projectTest = { db, DEFAULT_SETTINGS, expireProjectCommands, projectPending: (c) => !!c && ["sent", "queued"].includes(c.status), projectConfigsWithDefaults: (raw) => raw ?? { weather: {}, "analog-clock": {} }, sanitizeProjectConfig: (_project, value) => value };
 let storeSource = ts.transpileModule(readFileSync("src/lib/device-store.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-storeSource = storeSource.replace(/import .* from "@\/lib\/project-transfers";/, "const { expireProjectCommands, projectPending } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/db";/, "const { db } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS } = globalThis.__projectTest;");
+storeSource = storeSource.replace(/import .* from "@\/lib\/project-transfers";/, "const { expireProjectCommands, projectPending } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/db";/, "const { db } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/project-config";/, "const { projectConfigsWithDefaults } = globalThis.__projectTest;");
 const store = await import(`data:text/javascript;base64,${Buffer.from(storeSource).toString("base64")}`);
-const file = readFileSync(`public${manifest.projects[0].path}`).toString("base64");
-const meta = { name: "Local clock", version: "1.0.1", size: Buffer.from(file, "base64").length, file };
+const file = readFileSync(`public${manifest.projects[0].path}`);
+const meta = { name: "Local clock", version: "1.0.1", size: file.length, bytes: file };
 const queued = await store.queueCommand("owner", "board", "project_install", "id=custom-clock&path=%2Fapi%2Fdevices%2F&abi=1", "", meta);
-assert.equal(queued.commands[0].file, undefined, "Uploaded bytes must never appear in public responses");
+assert.equal(queued.commands[0].fileId, undefined, "Uploaded file references must never appear in public responses");
 const first = row.commands[0];
+assert.ok(first.fileId && storedFiles.has(first.fileId));
 assert.ok(new URLSearchParams(first.arg).get("path").includes(first.id));
 assert.equal(await store.projectFileForBoard("board", first.id, "wrong-token"), null);
-assert.equal((await store.projectFileForBoard("board", first.id, "board-secret")).toString("base64"), file);
+assert.deepEqual(await store.projectFileForBoard("board", first.id, "board-secret"), file);
 await store.stopProject("owner", "board", first.id);
 assert.equal(row.commands.length, 1, "Cancelling an undelivered request must not contact the board");
 assert.equal(row.commands[0].transfer.phase, "cancelled");
 await store.retryProjectFile("owner", "board", first.id);
 const retry = row.commands.at(-1);
-assert.notEqual(retry.id, first.id); assert.equal(retry.file, file);
+assert.notEqual(retry.id, first.id); assert.equal(retry.fileId, first.fileId);
 assert.ok(new URLSearchParams(retry.arg).get("path").includes(retry.id));
-const report = { token: "board-secret", secret: "", mac: row.mac, board: row.board, firmware: "1.0.5", uptime: 11, rev: 0, settings: DEFAULT_SETTINGS, projectSupported: true, tests: {}, acks: [], projectStatus: null, projectLogs: [], networks: null, ota: null, resetReason: "", unlink: false };
+const report = { token: "board-secret", secret: "", mac: row.mac, board: row.board, firmware: "1.0.5", uptime: 11, rev: 0, settings: DEFAULT_SETTINGS, projectApi: 2, projectVersion: "1.1.0", projectSha256: "a".repeat(64), projectSafeMode: false, tests: {}, acks: [], projectStatus: null, projectLogs: [], networks: null, ota: null, resetReason: "", unlink: false };
 await store.syncBoard(report, 0, new AbortController().signal);
 assert.equal(row.commands.at(-1).status, "sent");
 await store.stopProject("owner", "board", retry.id);
@@ -108,7 +131,7 @@ assert.ok(row.commands.some((c) => c.id === "ordinary-command"));
 const { sanitizeSettings } = await moduleFrom("src/lib/device-settings.ts");
 Object.assign(globalThis.__projectTest, { getUser: async () => ({ id: "owner" }), unauthorized: () => new Response(null, { status: 401 }), sanitizeSettings, listDevices: store.listDevices, removeDevice: store.removeDevice, updateDevice: store.updateDevice });
 let routeSource = ts.transpileModule(readFileSync("src/app/api/devices/[id]/route.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-routeSource = routeSource.replace(/import .* from "@\/lib\/auth";/, "const { getUser, unauthorized } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS, sanitizeSettings } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-store";/, "const { listDevices, removeDevice, updateDevice } = globalThis.__projectTest;");
+routeSource = routeSource.replace(/import .* from "@\/lib\/auth";/, "const { getUser, unauthorized } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS, sanitizeSettings } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-store";/, "const { listDevices, removeDevice, updateDevice } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/project-config";/, "const { sanitizeProjectConfig } = globalThis.__projectTest;");
 const route = await import(`data:text/javascript;base64,${Buffer.from(routeSource).toString("base64")}`);
 const patch = (settings) => route.PATCH(new Request("http://test/api/devices/board", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings }) }), { params: Promise.resolve({ id: "board" }) });
 assert.equal((await patch({ ...DEFAULT_SETTINGS, project: "weather", brightness: 50 })).status, 200, "Full Configure settings with unchanged project must save");

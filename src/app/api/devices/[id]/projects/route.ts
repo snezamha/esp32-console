@@ -10,7 +10,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
   const device = (await listDevices(user.id)).find((entry) => entry.id === id);
   if (!device) return Response.json({ error: "Device not found." }, { status: 404 });
   try {
-    if (!device.projectSupported || device.firmware.localeCompare("1.0.8", undefined, { numeric: true }) < 0) throw new Error("Update the base firmware to v1.0.8 before uploading a project file.");
+    if (!device.projectSupported || device.firmware.localeCompare("1.0.9", undefined, { numeric: true }) < 0) throw new Error("Update the base firmware to v1.0.9 before uploading a project file.");
     if (isOtaActive(device.ota)) throw new Error("A firmware installation is running.");
     if (Number(request.headers.get("content-length")) > 140 * 1024) throw new Error("Project files must be at most 128 KB.");
     const form = await request.formData();
@@ -19,8 +19,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
     const bytes = Buffer.from(await file.arrayBuffer());
     const meta = inspectProject(bytes);
     if (meta.board !== device.board) throw new Error("This project targets another board.");
-    const arg = new URLSearchParams({ id: meta.id, path: "/api/devices/", abi: "1", size: String(bytes.length), md5: createHash("md5").update(bytes).digest("hex") }).toString();
-    const updated = await queueCommand(user.id, id, "project_install", arg, "", { name: meta.name, version: meta.version, size: bytes.length, file: bytes.toString("base64") });
+    const arg = new URLSearchParams({ id: meta.id, version: meta.version, path: "/api/devices/", abi: "2", size: String(bytes.length), md5: createHash("md5").update(bytes).digest("hex"), sha256: createHash("sha256").update(bytes).digest("hex") }).toString();
+    const updated = await queueCommand(user.id, id, "project_install", arg, "", { name: meta.name, version: meta.version, size: bytes.length, bytes });
     return Response.json({ device: updated }, { status: 202 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Upload failed." }, { status: 400 }); }
 }

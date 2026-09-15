@@ -45,6 +45,8 @@ model Device {
 
   /// Last settings uploaded by the board.
   reported         Json
+  /// Settings owned by each independently installed display project.
+  projectSettings  Json    @default("{}")
   /// Console edits not yet confirmed by the board: { [key]: { value, rev } }.
   pending          Json    @default("{}")
   settingsReported Boolean @default(false)
@@ -56,7 +58,22 @@ model Device {
   ota              Json?
   /// [primary ssid, backup ssid].
   networks         Json    @default("[]")
+  projectFiles     ProjectFile[]
 
   @@index([owner])
   @@index([mac])
+}
+
+/// A user-supplied project binary. Commands only retain this row's id, so retries do not copy
+/// a base64 payload into the device JSON and normal device-list reads stay small.
+model ProjectFile {
+  id        String   @id @default(uuid())
+  deviceId  String
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  name      String
+  version   String
+  bytes     Bytes
+  createdAt DateTime @default(now())
+
+  @@index([deviceId, createdAt])
 }

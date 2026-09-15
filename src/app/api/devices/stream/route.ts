@@ -1,5 +1,5 @@
 import { getUser, unauthorized } from "@/lib/auth";
-import { listDevices, rowsSignature, waitForChange } from "@/lib/device-store";
+import { deviceRowsSignature, listDevices, waitForChange } from "@/lib/device-store";
 
 // Kept short and single-shot (one poll cycle per response) rather than a long-lived stream, so it
 // stays well under Vercel's default (Hobby-plan) 10 s function limit; the browser's EventSource
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
         const initial = await listDevices(user.id);
         send(initial);
         if (!request.signal.aborted) {
-          const changed = await waitForChange(user.id, rowsSignature(initial), WAIT_MS, request.signal);
+          const changed = await waitForChange(user.id, await deviceRowsSignature(user.id), WAIT_MS, request.signal);
           if (!request.signal.aborted) send(changed);
         }
       } catch {

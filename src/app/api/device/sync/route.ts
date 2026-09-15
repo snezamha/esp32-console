@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, formatSettingValue, sanitizeSettings } from "@/lib/device-settings";
-import { syncBoard, weatherSettingsForBoard, type SyncResult } from "@/lib/device-store";
+import { projectSettingsForBoard, syncBoard, type SyncResult } from "@/lib/device-store";
 import { weatherPayload } from "@/lib/weather";
 import type { ProjectPhase } from "@/lib/project-transfers";
 import type { TestResult } from "@/lib/device-types";
@@ -95,7 +95,10 @@ export async function POST(request: Request) {
     uptime: int("uptime", 0),
     rev: int("rev", 0),
     settings: Object.keys(reported).length ? sanitizeSettings(reported, DEFAULT_SETTINGS) : null,
-    projectSupported: field("project_api") === "1",
+    projectApi: Math.max(0, Math.min(9, int("project_api", 0))),
+    projectVersion: field("project_version", 32),
+    projectSha256: field("project_sha256", 64).toLowerCase(),
+    projectSafeMode: field("project_safe") === "1",
     projectStatus: projectId && phases.includes(projectPhase) ? { id: projectId, phase: projectPhase as ProjectPhase, progress: Math.min(100, Math.max(0, parseInt(projectProgress, 10) || 0)), bytes: Math.max(0, parseInt(projectBytes, 10) || 0), total: Math.max(0, parseInt(projectTotal, 10) || 0) } : null,
     projectLogs,
     resetReason: field("reset_reason"),
@@ -119,14 +122,14 @@ export async function POST(request: Request) {
   if (result.status === "linked" && report.settings) {
     const settings = { ...report.settings, ...result.settings };
     if (settings.project === "analog-clock") {
-      const device = await weatherSettingsForBoard(report.token);
-      if (device) lines.push(`project_data=${device.project_seconds ? "1" : "0"}`);
+      const config = await projectSettingsForBoard(report.token, "analog-clock");
+      if (config) lines.push(`project_data=${encodeURIComponent(`${config.seconds ? "1" : "0"}|${config.date ? "1" : "0"}|${config.style ?? "ticks"}`)}`);
     }
     if (settings.project === "weather") {
       const budget = Math.max(1, Math.min(4000, 8500 - (Date.now() - startedAt)));
       // Coordinates are console-side project configuration, not base firmware settings.
-      const device = await weatherSettingsForBoard(report.token);
-      if (device) lines.push(`project_data=${encodeURIComponent(await weatherPayload(device, budget))}`);
+      const config = await projectSettingsForBoard(report.token, "weather");
+      if (config) lines.push(`project_data=${encodeURIComponent(await weatherPayload(config, budget))}`);
     }
   }
   return reply(lines);

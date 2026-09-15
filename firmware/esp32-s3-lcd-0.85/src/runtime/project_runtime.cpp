@@ -3,15 +3,17 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
-#include <esp_partition.h>
 #include <esp_system.h>
 #include <MD5Builder.h>
+#include <mbedtls/sha256.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <cstring>
+#include "../../config.h"
 #include "../common/settings.h"
 #include "../display/lcd_display.h"
 #include "../services/console_client.h"
@@ -20,6 +22,8 @@ extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
 namespace {
 constexpr size_t kMaxPackage = 128 * 1024;
+constexpr const char* kBoardId = "esp32-s3-lcd-0.85";
+constexpr int kProjectAbi = DISPLAY_PROJECT_ABI;
 std::string Encode(const std::string& text) {
   const char* hex = "0123456789ABCDEF";
   std::string result;
@@ -47,9 +51,60 @@ void Circle(void* p, int x, int y, int r, uint16_t color) {
   auto& d = *static_cast<Drawing*>(p);
   d.c->FillCircle(d.x+x, d.y+y, std::clamp(r, 0, 128), color);
 }
+void Rect(void* p, int x, int y, int w, int h, uint16_t color) {
+  auto& d = *static_cast<Drawing*>(p);
+  d.c->Rect(d.x+x, d.y+y, std::clamp(w, 0, d.w), std::clamp(h, 0, d.h), color);
+}
+void FillRect(void* p, int x, int y, int w, int h, uint16_t color) {
+  auto& d = *static_cast<Drawing*>(p);
+  d.c->FillRect(d.x+x, d.y+y, std::clamp(w, 0, d.w), std::clamp(h, 0, d.h), color);
+}
+int TextWidth(const char* text, int scale) { return Canvas::TextWidth(text, std::clamp(scale, 1, 3)); }
+
+bool JsonString(const std::string& json, const char* key, std::string& value) {
+  const std::string needle = std::string("\"") + key + "\"";
+  size_t p = json.find(needle);
+  if (p == std::string::npos || (p = json.find(':', p + needle.size())) == std::string::npos ||
+      (p = json.find('"', p + 1)) == std::string::npos) return false;
+  value.clear();
+  for (++p; p < json.size(); ++p) {
+    const char c = json[p];
+    if (c == '"') return true;
+    if (c == '\\' || static_cast<unsigned char>(c) < 0x20) return false;
+    value += c;
+  }
+  return false;
+}
+bool JsonInt(const std::string& json, const char* key, int& value) {
+  const std::string needle = std::string("\"") + key + "\"";
+  size_t p = json.find(needle);
+  if (p == std::string::npos || (p = json.find(':', p + needle.size())) == std::string::npos) return false;
+  char* end = nullptr; value = strtol(json.c_str() + p + 1, &end, 10);
+  return end != json.c_str() + p + 1;
+}
+bool ValidId(const std::string& id) {
+  if (id.empty() || id.size() > 48 || id == "none" || !isalnum(static_cast<unsigned char>(id[0]))) return false;
+  return std::all_of(id.begin(), id.end(), [](unsigned char c) { return islower(c) || isdigit(c) || c == '-'; });
+}
+std::vector<std::string> Parts(const std::string& value) {
+  std::vector<std::string> parts; size_t start = 0;
+  for (;;) { const size_t end = value.find('|', start); parts.push_back(value.substr(start, end - start)); if (end == std::string::npos) return parts; start = end + 1; }
+}
+std::string ComputeSha256(const std::vector<uint8_t>& bytes) {
+  uint8_t digest[32]; mbedtls_sha256_context ctx; mbedtls_sha256_init(&ctx);
+  const bool failed = mbedtls_sha256_starts(&ctx, 0) != 0 || mbedtls_sha256_update(&ctx, bytes.data(), bytes.size()) != 0 || mbedtls_sha256_finish(&ctx, digest) != 0;
+  mbedtls_sha256_free(&ctx);
+  if (failed) return "";
+  static const char hex[] = "0123456789abcdef"; std::string out(64, '0');
+  for (size_t i = 0; i < sizeof(digest); ++i) { out[i*2] = hex[digest[i] >> 4]; out[i*2+1] = hex[digest[i] & 15]; }
+  return out;
+}
+bool AbnormalReset(esp_reset_reason_t reason) {
+  return reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT || reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT;
+}
 }
 
-bool ProjectRuntime::Load(const std::vector<uint8_t>& bytes, esp_elf_t& elf) {
+bool ProjectRuntime::Inspect(const std::vector<uint8_t>& bytes, Metadata& metadata) {
   if (bytes.size() < sizeof(elf32_hdr_t) || bytes.size() > kMaxPackage) return false;
   const auto* hdr = reinterpret_cast<const elf32_hdr_t*>(bytes.data());
   if (memcmp(bytes.data(), "\x7f" "ELF\x01\x01", 6) || hdr->type != 3 || hdr->machine != 94 || hdr->shentsize != sizeof(elf32_shdr_t) ||
@@ -61,7 +116,7 @@ bool ProjectRuntime::Load(const std::vector<uint8_t>& bytes, esp_elf_t& elf) {
         (sections[i].type != SHT_NOBITS && (sections[i].offset > bytes.size() || sections[i].size > bytes.size() - sections[i].offset))) return false;
   }
   const auto& names = sections[hdr->shstrndx];
-  bool entry_valid = false;
+  bool entry_valid = false, metadata_valid = false;
   auto mapped = [&](uint32_t address, uint32_t length) {
     for (int j = 0; j < hdr->shnum; ++j) {
       const auto& section = sections[j];
@@ -80,6 +135,12 @@ bool ProjectRuntime::Load(const std::vector<uint8_t>& bytes, esp_elf_t& elf) {
   for (int i = 0; i < hdr->shnum; ++i) {
     const auto& section = sections[i];
     const char* name = reinterpret_cast<const char*>(bytes.data() + names.offset + section.name);
+    if (!strcmp(name, ".project")) {
+      if (metadata_valid || section.type == SHT_NOBITS || !section.size || section.size > 4096) return false;
+      const std::string json(reinterpret_cast<const char*>(bytes.data() + section.offset), section.size);
+      metadata_valid = JsonString(json, "id", metadata.id) && JsonString(json, "name", metadata.name) &&
+          JsonString(json, "version", metadata.version) && JsonString(json, "board", metadata.board) && JsonInt(json, "abi", metadata.abi);
+    }
     if (!strcmp(name, ".text") && (section.flags & SHF_EXECINSTR) && hdr->entry >= section.addr && hdr->entry - section.addr < section.size) entry_valid = true;
     if (section.type == 11) {
       if (section.size % 16 || sections[section.link].type != SHT_STRTAB) return false;
@@ -111,7 +172,12 @@ bool ProjectRuntime::Load(const std::vector<uint8_t>& bytes, esp_elf_t& elf) {
     }
     if (section.type == SHT_REL) return false;
   }
-  if (!entry_valid) return false;
+  return entry_valid && metadata_valid && ValidId(metadata.id) && !metadata.name.empty() && metadata.name.size() <= 80 &&
+      metadata.board == kBoardId && metadata.abi == kProjectAbi;
+}
+
+bool ProjectRuntime::Load(const std::vector<uint8_t>& bytes, esp_elf_t& elf, Metadata& metadata) {
+  if (!Inspect(bytes, metadata)) return false;
   esp_elf_init(&elf);
   if (esp_elf_relocate(&elf, bytes.data())) { esp_elf_deinit(&elf); return false; }
   return true;
@@ -140,6 +206,7 @@ std::string ProjectRuntime::Report() {
 void ProjectRuntime::Begin() {
   log_mutex_ = xSemaphoreCreateMutex();
   bool interrupted = false;
+  std::string active;
   {
     Settings s("project", true);
     command_id_ = s.GetString("pending", "");
@@ -154,31 +221,61 @@ void ProjectRuntime::Begin() {
       s.SetString("pending", "");
       Log(error_, true);
     }
+    active = s.GetString("active", "0|none");
+    const auto saved = Parts(active);
+    const bool has_project = saved.size() > 1 && saved[1] != "none";
+    pinMode(VOLUME_UP_BUTTON_GPIO, INPUT_PULLUP);
+    const bool manual_safe_mode = digitalRead(VOLUME_UP_BUTTON_GPIO) == LOW;
+    int crashes = s.GetInt("crashes", 0);
+    if (has_project && AbnormalReset(esp_reset_reason())) crashes++;
+    else if (!AbnormalReset(esp_reset_reason())) crashes = 0;
+    if (has_project && (manual_safe_mode || crashes >= 3)) {
+      s.SetString("previous", active);
+      s.SetString("active", "0|none");
+      s.SetBool("trial", false);
+      s.SetInt("crashes", 0);
+      active = "0|none";
+      safe_mode_ = true;
+      Log(manual_safe_mode ? "Safe mode: Vol+ was held during boot; project disabled." : "Safe mode: project disabled after repeated watchdog/panic resets.", true);
+    } else {
+      s.SetInt("crashes", crashes);
+    }
   }
   mounted_ = LittleFS.begin(false);
   if (!mounted_) {
-    const esp_partition_t* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
-    uint8_t first[16];
-    if (part && esp_partition_read(part, 0, first, sizeof(first)) == ESP_OK &&
-        std::all_of(first, first + sizeof(first), [](uint8_t b) { return b == 0xff; })) mounted_ = LittleFS.begin(true);
+    // This partition contains only replaceable project slots. Reformatting it is a safe recovery:
+    // the base firmware and settings are elsewhere and the console can reinstall the package.
+    mounted_ = LittleFS.begin(true);
+    if (mounted_) {
+      Settings s("project", true); s.SetString("active", "0|none"); s.SetBool("trial", false);
+      active = "0|none"; safe_mode_ = true;
+      Log("Project storage was repaired; default display restored.", true);
+    }
   }
   if (!mounted_) return;
-  Settings s("project");
-  const std::string active = s.GetString("active", "0|none");
-  slot_ = !active.empty() && active[0] == '1' ? 1 : 0;
-  const std::string saved = active.size() > 2 ? active.substr(2) : "none";
-  if (saved == "none") return;
+  const auto saved = Parts(active);
+  slot_ = !saved.empty() && saved[0] == "1" ? 1 : 0;
+  if (saved.size() < 2 || saved[1] == "none") return;
   auto file = LittleFS.open(Path(slot_).c_str(), "r");
   if (!file || file.size() > kMaxPackage) return;
   std::vector<uint8_t> bytes(file.size());
-  if (file.read(bytes.data(), bytes.size()) == bytes.size() && Load(bytes, elf_)) { loaded_ = true; id_ = saved; }
+  Metadata metadata;
+  if (file.read(bytes.data(), bytes.size()) == bytes.size() && Load(bytes, elf_, metadata) && metadata.id == saved[1]) {
+    loaded_ = true; id_ = metadata.id; version_ = metadata.version; sha256_ = ComputeSha256(bytes);
+    Settings s("project", true);
+    s.SetString("active", std::to_string(slot_) + "|" + id_ + "|" + version_ + "|" + sha256_);
+  } else {
+    Settings s("project", true); s.SetString("active", "0|none");
+    safe_mode_ = true; Log("Saved project failed validation and was disabled.", true);
+  }
 }
 
-bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const std::string& id) {
+bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const Metadata& expected) {
   esp_elf_t candidate{};
+  Metadata metadata;
   { Settings s("project", true); s.SetString("phase", "ELF relocation"); }
   stage_ = 3; Log("Validating and relocating the project ELF into internal executable memory.");
-  if (!mounted_ || !Load(bytes, candidate)) return false;
+  if (!mounted_ || !Load(bytes, candidate, metadata) || metadata.id != expected.id || metadata.version != expected.version) return false;
   char addresses[96]; snprintf(addresses, sizeof(addresses), "ELF loaded: entry %p, code %p, data %p.", reinterpret_cast<void*>(candidate.entry), candidate.ptext, candidate.pdata);
   Log(addresses);
   { Settings s("project", true); s.SetString("phase", "flash write"); }
@@ -192,13 +289,41 @@ bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const std::stri
     s.SetString("previous", s.GetString("active", "0|none"));
     s.SetBool("trial", true);
     s.SetString("phase", "first display frame");
-    s.SetString("active", std::to_string(next_slot) + "|" + id);
+    s.SetString("active", std::to_string(next_slot) + "|" + metadata.id + "|" + metadata.version + "|" + expected_sha256_);
   }
   if (loaded_) esp_elf_deinit(&elf_);
-  elf_ = candidate; loaded_ = true; slot_ = next_slot; id_ = id;
+  elf_ = candidate; loaded_ = true; slot_ = next_slot; id_ = metadata.id; version_ = metadata.version; sha256_ = expected_sha256_;
   data_[0].clear(); data_[1].clear(); data_at_ = 0;
-  testing_ = true; stage_ = 5; Log("Testing the first project frame before confirming installation.");
+  testing_ = true; healthy_recorded_ = false; first_frame_at_ = 0; stage_ = 5; Log("Testing the first project frame before confirming installation.");
   return true;
+}
+
+bool ProjectRuntime::RestorePrevious(const std::string& reason) {
+  if (loaded_) esp_elf_deinit(&elf_);
+  loaded_ = false; id_ = "none"; version_.clear(); sha256_.clear(); testing_ = false;
+  Settings s("project", true);
+  const std::string previous = s.GetString("previous", "0|none");
+  const auto parts = Parts(previous);
+  s.SetBool("trial", false); s.SetString("pending", ""); s.SetString("active", previous);
+  if (parts.size() >= 2 && parts[1] != "none") {
+    const int previous_slot = parts[0] == "1" ? 1 : 0;
+    auto file = LittleFS.open(Path(previous_slot).c_str(), "r");
+    if (file && file.size() <= kMaxPackage) {
+      std::vector<uint8_t> bytes(file.size()); Metadata metadata;
+      if (file.read(bytes.data(), bytes.size()) == bytes.size() && Load(bytes, elf_, metadata) && metadata.id == parts[1]) {
+        loaded_ = true; slot_ = previous_slot; id_ = metadata.id; version_ = metadata.version; sha256_ = ComputeSha256(bytes);
+      }
+    }
+  }
+  if (!loaded_) s.SetString("active", "0|none");
+  error_ = reason + (loaded_ ? " Previous project restored." : " Default display restored.");
+  stage_ = 7; ack_ok_ = false; ack_ready_ = true; Log(error_, true);
+  return loaded_;
+}
+
+void ProjectRuntime::RecordHealthyFrame() {
+  if (!loaded_ || healthy_recorded_ || !first_frame_at_ || millis() - first_frame_at_ < 30000) return;
+  Settings s("project", true); s.SetInt("crashes", 0); healthy_recorded_ = true;
 }
 
 std::string ProjectRuntime::Start(const std::string& command_id, const std::string& arg, const std::string& server, bool insecure, const std::string& token) {
@@ -207,15 +332,17 @@ std::string ProjectRuntime::Start(const std::string& command_id, const std::stri
   if (id == "none") {
     { Settings s("project", true); s.SetString("active", "0|none"); }
     if (loaded_) esp_elf_deinit(&elf_);
-    loaded_ = false; id_ = "none";
+    loaded_ = false; id_ = "none"; version_.clear(); sha256_.clear(); safe_mode_ = false;
     return "ok|Default display restored";
   }
   if (!mounted_) return "fail|Project flash storage unavailable";
   const auto path = ConsoleClient::FormValue(arg, "path");
   const auto abi = ConsoleClient::FormValue(arg, "abi");
+  target_version_ = ConsoleClient::FormValue(arg, "version");
   expected_size_ = strtoul(ConsoleClient::FormValue(arg, "size").c_str(), nullptr, 10);
   md5_ = ConsoleClient::FormValue(arg, "md5");
-  if (id.empty() || (path.rfind("/projects/", 0) != 0 && path.rfind("/api/devices/", 0) != 0) || abi != "1" || !expected_size_ || expected_size_ > kMaxPackage || md5_.size() != 32) return "fail|Invalid project package";
+  expected_sha256_ = ConsoleClient::FormValue(arg, "sha256");
+  if (id.empty() || target_version_.empty() || (path.rfind("/projects/", 0) != 0 && path.rfind("/api/devices/", 0) != 0) || abi != std::to_string(kProjectAbi) || !expected_size_ || expected_size_ > kMaxPackage || md5_.size() != 32 || expected_sha256_.size() != 64) return "fail|Invalid project package";
   command_id_ = command_id; target_id_ = id; url_ = server + path; insecure_ = insecure; token_ = token;
   if (log_mutex_ && xSemaphoreTake(log_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) { logs_.clear(); next_log_ = 1; xSemaphoreGive(log_mutex_); }
   cancel_ = false; stop_id_.clear(); ack_ready_ = false; received_ = 0; stage_ = 1;
@@ -268,6 +395,7 @@ void ProjectRuntime::DownloadTask(void* arg) {
         for (size_t offset = 0; offset < self->downloaded_.size(); offset += 4096) md5.add(self->downloaded_.data() + offset, std::min<size_t>(4096, self->downloaded_.size() - offset));
         md5.calculate();
         if (md5.toString() != self->md5_.c_str()) self->error_ = "Project checksum mismatch";
+        else if (ComputeSha256(self->downloaded_) != self->expected_sha256_) self->error_ = "Project SHA-256 mismatch";
       }
     }
     http.end();
@@ -290,7 +418,7 @@ std::vector<std::string> ProjectRuntime::Loop() {
   }
   if (!done_.exchange(false)) return acks;
   if (cancel_) error_ = "Cancelled by user";
-  if (error_.empty() && !Activate(downloaded_, target_id_)) error_ = "Invalid ELF or failed flash write";
+  if (error_.empty() && !Activate(downloaded_, {target_id_, "", target_version_, kBoardId, kProjectAbi})) error_ = "Project identity, ABI, ELF or flash validation failed";
   downloaded_.clear(); busy_ = false;
   if (!error_.empty()) {
     stage_ = cancel_ ? 8 : 7; Log(error_, !cancel_);
@@ -302,8 +430,9 @@ std::vector<std::string> ProjectRuntime::Loop() {
 }
 
 void ProjectRuntime::SetData(const std::string& data) {
-  const auto divider = data.find('|');
-  data_[0] = data.substr(0, divider); data_[1] = divider == std::string::npos ? "" : data.substr(divider + 1);
+  const std::string bounded = data.substr(0, 512);
+  const auto divider = bounded.find('|');
+  data_[0] = bounded.substr(0, divider); data_[1] = divider == std::string::npos ? "" : bounded.substr(divider + 1);
   data_at_ = millis();
 }
 
@@ -318,15 +447,20 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
   Drawing drawing{&c, x, y, w, h};
   const time_t now = time(nullptr); const tm local = *localtime(&now);
   ProjectFrame frame{DISPLAY_PROJECT_ABI, &drawing, w, h, local.tm_hour, local.tm_min, local.tm_sec,
+    local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_wday,
     Network::GetInstance().TimeValid(), data_at_ ? millis()-data_at_ : 0,
-    {data_[0].c_str(), data_[1].c_str()}, theme.text, theme.muted, theme.info, Label, Line, Ring, Circle, sinf, cosf};
+    {data_[0].c_str(), data_[1].c_str()}, {static_cast<uint32_t>(data_[0].size()), static_cast<uint32_t>(data_[1].size())}, millis(),
+    theme.text, theme.muted, theme.info, Label, Line, Ring, Circle, Rect, FillRect, TextWidth, sinf, cosf};
   const auto saved = c.GetClip(); c.IntersectClip(x,y,w,h);
   char* argv[] = {reinterpret_cast<char*>(&frame)};
-  esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);
+  const int result = esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);
   if (testing_) {
+    if (result != 0) { RestorePrevious("Project rejected its first display frame."); return loaded_; }
     testing_ = false; stage_ = 6; progress_ = 100; ack_ok_ = true; ack_ready_ = true;
+    first_frame_at_ = millis();
     { Settings s("project", true); s.SetBool("trial", false); s.SetString("pending", ""); }
     Log("Project activated successfully. First display frame completed.");
   }
+  RecordHealthyFrame();
   return true;
 }

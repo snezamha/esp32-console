@@ -1,6 +1,17 @@
 {
   "id": "analog-clock",
   "name": "Analog clock",
-  "version": "1.0.1",
-  "description": "A live clock using the board\u2019s configured time zone."
+  "version": "1.1.0",
+  "description": "A configurable analog clock with date and multiple dial styles.",
+  "category": "Clock",
+  "icon": "clock",
+  "accent": "#8b5cf6",
+  "minimumFirmware": "1.0.9",
+  "capabilities": ["time"],
+  "settings": [
+    { "key": "timezone", "type": "timezone", "label": "Time zone", "default": "Europe/Berlin" },
+    { "key": "seconds", "type": "boolean", "label": "Show second hand", "default": true },
+    { "key": "date", "type": "boolean", "label": "Show date", "default": true },
+    { "key": "style", "type": "select", "label": "Dial style", "default": "ticks", "options": [{ "value": "ticks", "label": "Hour ticks" }, { "value": "minimal", "label": "Minimal" }] }
+  ]
 }
