@@ -20,6 +20,7 @@ const OTA_STATES = ["downloading", "done", "failed"];
  *   token       device token once linked
  *   mac, board, fw, ip, rssi, battery, charging, heap, uptime, rev
  *   s.<key>     current value of each setting in DeviceSettings
+ *   sd          SD card: <mounted 0|1>|<total bytes>|<free bytes>
  *   t.<key>     hardware check result: <status>|<detail>
  *   ota         <state>|<progress>|<error>
  *   wifi1, wifi2  saved network names
@@ -99,6 +100,7 @@ export async function POST(request: Request) {
     projectVersion: field("project_version", 32),
     projectSha256: field("project_sha256", 64).toLowerCase(),
     projectSafeMode: field("project_safe") === "1",
+    sdCard: sdCard(field("sd", 64)),
     projectStatus: projectId && phases.includes(projectPhase) ? { id: projectId, phase: projectPhase as ProjectPhase, progress: Math.min(100, Math.max(0, parseInt(projectProgress, 10) || 0)), bytes: Math.max(0, parseInt(projectBytes, 10) || 0), total: Math.max(0, parseInt(projectTotal, 10) || 0) } : null,
     projectLogs,
     resetReason: field("reset_reason"),
@@ -133,6 +135,14 @@ export async function POST(request: Request) {
     }
   }
   return reply(lines);
+}
+
+/** `mounted|total bytes|free bytes`, sent by firmware with display ABI 3. */
+function sdCard(value: string) {
+  const [mounted, total, free] = value.split("|");
+  if (!value || !["0", "1"].includes(mounted)) return null;
+  const bytes = (text: string) => Math.max(0, Number.parseInt(text, 10) || 0);
+  return { mounted: mounted === "1", total: bytes(total), free: Math.min(bytes(free), bytes(total)) };
 }
 
 function render(result: SyncResult) {

@@ -1,5 +1,7 @@
 #include "board.h"
 
+#include "../led/led_pattern.h"
+
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
@@ -232,21 +234,40 @@ void Board::WakeUp() {
   }
 }
 
-void Board::ApplyLed() {
+namespace {
+std::vector<LedPixel> ConfiguredPixels(int count) {
   static constexpr RgbColor kColors[] = {{255, 255, 255}, {255, 0, 0},   {0, 255, 0},  {0, 0, 255},
                                          {0, 255, 255},   {160, 0, 255}, {255, 90, 0}};
+  const auto& config = DeviceConfig::Get();
+  const RgbColor base = kColors[config.led_color % (sizeof(kColors) / sizeof(kColors[0]))];
+  return LedPattern::Parse(config.led_pixels, count, base);
+}
+}  // namespace
+
+void Board::ApplyLed() {
   const auto& config = DeviceConfig::Get();
   if (!config.led_on) {
     led_ring_->Clear();
   } else {
-    const RgbColor base = kColors[config.led_color % (sizeof(kColors) / sizeof(kColors[0]))];
-    const int level = std::clamp(config.led_brightness, 1, 8);
-    const int scale = (1 << level) - 1;  // 1 … 255
-    led_ring_->SetAll({static_cast<uint8_t>(base.red * scale / 255),
-                       static_cast<uint8_t>(base.green * scale / 255),
-                       static_cast<uint8_t>(base.blue * scale / 255)});
+    const auto frame = LedPattern::Render(config.led_mode, ConfiguredPixels(led_ring_->count()),
+                                          config.led_speed, config.led_brightness, millis());
+    for (int i = 0; i < led_ring_->count(); i++) led_ring_->SetPixel(i, frame[i]);
   }
   led_ring_->Show();
+  led_frame_ms_ = millis();
+}
+
+void Board::AnimateLed(uint32_t now_ms) {
+  const auto& config = DeviceConfig::Get();
+  if (!config.led_on || now_ms - led_frame_ms_ < 33) return;
+  static std::string cached_mode, cached_pixels = "\x01";
+  static int cached_color = -1;
+  static bool animated = false;
+  if (cached_mode != config.led_mode || cached_pixels != config.led_pixels || cached_color != config.led_color) {
+    cached_mode = config.led_mode; cached_pixels = config.led_pixels; cached_color = config.led_color;
+    animated = LedPattern::Animated(config.led_mode, ConfiguredPixels(led_ring_->count()));
+  }
+  if (animated) ApplyLed();
 }
 
 void Board::ApplyPowerHold() { pwr_button_.SetLongPressTime(DeviceConfig::Get().power_hold_ms); }

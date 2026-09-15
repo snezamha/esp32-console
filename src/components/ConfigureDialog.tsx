@@ -2,11 +2,13 @@
 
 import { Button } from "@headlessui/react";
 import { useState } from "react";
+import { LedRingDesigner } from "@/components/LedRingDesigner";
+import { SdFileManager, formatBytes, runFileJob } from "@/components/SdFileManager";
 import { Select } from "@/components/Select";
-import { ErrorText, Group, Sheet, Slider, Toggle, accentButton, inputClass, secondaryButton } from "@/components/ui";
-import { api, boardName, deviceName, duration } from "@/lib/device-client";
+import { ConfirmDialog, ErrorText, Group, Sheet, Slider, Toggle, ToastBanner, accentButton, inputClass, secondaryButton, useToast } from "@/components/ui";
+import { api, boardName, compareVersions, deviceName, duration } from "@/lib/device-client";
 import { LED_COLORS, POWER_OFF_OPTIONS, SLEEP_OPTIONS, TIME_ZONES, type DeviceSettings } from "@/lib/device-settings";
-import type { PublicDevice } from "@/lib/device-types";
+import { SD_FILES_FIRMWARE, type PublicDevice } from "@/lib/device-types";
 import { errorMessage } from "@/lib/esp";
 
 export function ConfigureDialog({
@@ -20,6 +22,24 @@ export function ConfigureDialog({
   const [settings, setSettings] = useState<DeviceSettings>(device.settings);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState(false);
+  const [confirmFormat, setConfirmFormat] = useState(false);
+  const [formatting, setFormatting] = useState(false);
+  const [toast, setToast] = useToast();
+  const modern = compareVersions(device.firmware, SD_FILES_FIRMWARE) >= 0;
+  const format = async () => {
+    setConfirmFormat(false);
+    setFormatting(true);
+    setError(null);
+    try {
+      await runFileJob(device, { type: "sd_format" });
+      setToast("SD card formatted");
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setFormatting(false);
+    }
+  };
   const set = <K extends keyof DeviceSettings>(key: K, value: DeviceSettings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }));
 
@@ -120,14 +140,40 @@ export function ConfigureDialog({
               onChange={(v) => set("led_feedback", v)}
             />
             <Slider label="LED brightness" value={settings.led_brightness} min={1} max={8} step={1} unit="/8" onChange={(v) => set("led_brightness", v)} />
-            <Select
-              label="LED color"
-              value={settings.led_color}
-              options={LED_COLORS.map((_, i) => i)}
-              onChange={(v) => set("led_color", v)}
-              getKey={String}
-              renderValue={(v) => LED_COLORS[v]}
-            />
+            {!modern && (
+              <Select
+                label="LED color"
+                value={settings.led_color}
+                options={LED_COLORS.map((_, i) => i)}
+                onChange={(v) => set("led_color", v)}
+                getKey={String}
+                renderValue={(v) => LED_COLORS[v]}
+              />
+            )}
+          </Group>
+
+          {modern ? (
+            <Group title="LED ring designer">
+              <LedRingDesigner value={settings} onChange={(next) => setSettings((prev) => ({ ...prev, ...next }))} />
+            </Group>
+          ) : (
+            <p className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-500 dark:bg-zinc-800/60">Update the base firmware to v{SD_FILES_FIRMWARE} for per-LED colors, blinking and ring effects.</p>
+          )}
+
+          <Group title="SD card">
+            <p className="text-sm text-zinc-500">
+              {!device.sdCard ? "Not reported by this firmware." : device.sdCard.mounted ? `${formatBytes(device.sdCard.free)} free of ${formatBytes(device.sdCard.total)}` : "No card detected. Operations check the card again."}
+            </p>
+            {modern ? (
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => setFiles(true)} disabled={formatting} className={secondaryButton + " h-10 px-4"}>Open file manager</Button>
+                <Button onClick={() => setConfirmFormat(true)} disabled={formatting} className="h-10 rounded-xl border border-red-200 px-4 text-sm font-medium text-red-600 data-disabled:opacity-50 data-hover:bg-red-50 dark:border-red-900 dark:data-hover:bg-red-950">
+                  {formatting ? "Formatting… waiting for the board" : "Format card"}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500">Update the base firmware to v{SD_FILES_FIRMWARE} to browse and format the card.</p>
+            )}
           </Group>
 
           <Group title="Connectivity & time">
@@ -144,6 +190,16 @@ export function ConfigureDialog({
           </Group>
         </>
       )}
+      {files && <SdFileManager device={device} onClose={() => setFiles(false)} />}
+      <ConfirmDialog
+        open={confirmFormat}
+        onClose={() => setConfirmFormat(false)}
+        onConfirm={format}
+        title="Format the SD card?"
+        description="Every file on the card is erased, including images and videos of installed display projects; those projects show “Insert SD card” until reinstalled. This cannot be undone."
+        confirmLabel="Erase and format"
+      />
+      <ToastBanner toast={toast} />
     </Sheet>
   );
 }

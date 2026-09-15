@@ -150,6 +150,42 @@ pnpm projects:build
 
 This writes separate `.elf` files into `public/projects/<board>/<project>/<version>.elf` and updates `projects/manifest.json`. It uses the installed ESP32-S3 Arduino compiler; set `PROJECT_CC` to `xtensa-esp32s3-elf-gcc` on other setups. New projects implement `app_main(int argc, char **argv)` using the shared `ProjectFrame` ABI and provide a `project.json` manifest. Modules must have no unresolved imports and return after each frame. Run `pnpm projects:test` for standalone-file and transfer-state checks.
 
+### SD card assets (base firmware v1.1.0, display ABI 3)
+
+Large projects (images, videos, data files) keep those files on a microSD card, while the small `.elf` module stays in the project flash slots. The base firmware is never modified, and projects without assets work exactly as before without a card.
+
+Add an `assets/` folder next to `main.c`. `pnpm projects:build` then:
+
+- builds the module for ABI 3 (projects without `assets/` stay on ABI 2 and produce identical binaries);
+- converts `.png .jpg .jpeg .webp .bmp` to `.img` and `.mp4 .mov .webm .mkv .avi .gif` to `.vid` with `ffmpeg`, scaled to fit `media.maxWidth` × `media.maxHeight` (default 128 × 128) at `media.fps` (default 15) set in `project.json`; all other files are copied unchanged;
+- writes `public/projects/<board>/<id>/<version>/assets/…` plus a signed file list `assets.txt` (`name|size|sha256`) and adds `storage` and `assets` to the manifest.
+
+Names may be up to four folders deep, 96 characters, using letters, digits, `.`, `_` and `-`; at most 2000 files. `.img`/`.vid` files are a 16-byte little-endian header (`EVM1`, width, height, frames, fps, 4 reserved bytes) followed by big-endian RGB565 frames; transparency is flattened to black.
+
+Installation: the console refuses SD projects on older firmware and shows the card state the board last reported. The board is the authority — before downloading it re-mounts the card and refuses when no card is present or free space is below the package size plus 1 MB. It downloads every file into `/projects/<id>/<version>/` on the card, verifying each SHA-256 (files already present and valid from an interrupted or earlier install are reused), writes a `.complete` marker, and only then activates the module. After the first successful frame, folders of versions other than the active and previous ones are removed. If the card is missing at boot, the screen shows **Insert SD card** instead of running the module and retries every 10 seconds.
+
+Module API (check `f->abi >= 3`; every call returns -1 when the card or file is unavailable):
+
+```c
+int32_t size = f->asset_size("data.json");
+int32_t read = f->asset_read("data.json", 0, buffer, sizeof buffer);
+int w, h, frames, fps;
+if (!f->media_info("clips/intro.vid", &w, &h, &frames, &fps))
+  f->media_draw(f->canvas, (f->width - w) / 2, 0, "clips/intro.vid", f->frame_ms * fps / 1000);
+```
+
+Media drawing reads only the visible rows of the requested frame straight from the card; the board keeps up to four asset files open between frames.
+
+### SD card manager, LED ring designer (base firmware v1.1.1)
+
+With no project loaded, the linked board's default display is empty apart from the status bar; setup, pairing and pairing-error screens still appear.
+
+**Devices → Details → Status** shows the card's free space, capacity and usage as last reported by the board.
+
+**Devices → Configure → SD card** opens a file manager (browse folders, upload, download, rename, delete, new folder) and can format the card after confirmation. The board cannot be reached directly, so every operation is a queued command that the board picks up on its next check-in (usually within a second); it answers through `/api/device/files/<job>` using its device token. Uploads and downloads pass through the console and are limited to 4 MB per file; transferred bytes live in the `DeviceFile` table for at most 30 minutes. Run `pnpm db:push` after pulling this schema change. One operation runs at a time, never during a project installation; delete, rename and format pause the running project's SD access and re-check its files afterwards. Uploads are written to `<name>.part`, verified by size and SHA-256, then renamed into place.
+
+**Devices → Configure → LED ring designer** simulates the 8-LED ring: select LEDs, give each a color, level (0–100 %) and blink flag, choose an effect (static, blink all, breathe, spin, chasing dot, rainbow) and a speed, or start from a preset. The global LED brightness still applies. The design is stored as the `led_mode`, `led_speed` and `led_pixels` settings (`rrggbb:level:blink` per LED, clockwise from LED 1). Choosing a color in the device menu replaces a per-LED design with one color. `pnpm firmware:test:led` compiles the firmware pattern code on the host and checks that the simulator renders identical frames.
+
 Build the generic base separately with `pnpm firmware:build`. Firmware v1.0.5 retains automatic right-to-left marquee for overflowing text, with pauses at both ends; long notifications stay visible for a full pass.
 
 The loader is vendored from [Espressif’s ELF loader](https://github.com/espressif/esp-iot-solution/tree/6958385313b0e4fc1f3de259b1d677fca7d7d236/components/elf_loader), with pinned provenance and Apache-2.0 license under `src/runtime/elf_loader/`.

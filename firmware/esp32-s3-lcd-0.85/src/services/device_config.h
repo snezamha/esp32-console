@@ -13,6 +13,9 @@ struct DeviceConfig {
   bool led_feedback = false;  // Glow on press, low battery pulse, charging motion
   int led_brightness = 4;     // 1–8
   int led_color = 0;          // Index into kLedColors (0 = white)
+  std::string led_mode = "static";  // LedPattern effect
+  int led_speed = 5;                // 1–10
+  std::string led_pixels;           // LedPattern pixels; empty = every LED in led_color
   bool wifi_on = true;
   std::string wifi_ssid;
   std::string wifi_password;

@@ -15,6 +15,7 @@
 #include "../common/settings.h"
 #include "network.h"
 #include "../runtime/project_runtime.h"
+#include "sd_files.h"
 
 // Default console address; `pnpm firmware:build` writes console_url.h from the CONSOLE_URL
 // environment variable.
@@ -241,6 +242,7 @@ void ConsoleClient::Loop(uint32_t now_ms) {
     }
   }
   for (const auto& project_ack : ProjectRuntime::Get().Loop()) { acks_.push_back(project_ack); Changed(); }
+  for (const auto& file_ack : SdFiles::Get().Loop()) { acks_.push_back(file_ack); Changed(); }
   if (poll_.done) {
     poll_.done = false;
     const bool ok = poll_.code == 200;
@@ -507,6 +509,11 @@ void ConsoleClient::HandleCommand(const Command& command) {
     if (!result.empty()) acks_.push_back(command.id + "|" + result);
     Changed(); return;
   }
+  if (command.type.rfind("sd_", 0) == 0) {
+    const auto result = ota_active_ ? "fail|Firmware update is running" : SdFiles::Get().Start(command, server_, insecure_, token_);
+    if (!result.empty()) acks_.push_back(command.id + "|" + result);
+    Changed(); return;
+  }
   if (command.type == "ota") {
     StartOta(command);
     return;
@@ -519,7 +526,7 @@ void ConsoleClient::HandleCommand(const Command& command) {
 // Over-the-air update
 
 void ConsoleClient::StartOta(const Command& command) {
-  if (ota_active_ || ProjectRuntime::Get().Busy()) {
+  if (ota_active_ || ProjectRuntime::Get().Busy() || SdFiles::Get().Busy()) {
     acks_.push_back(command.id + "|fail|Another update is running");
     return;
   }

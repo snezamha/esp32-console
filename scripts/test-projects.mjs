@@ -33,6 +33,12 @@ for (const project of manifest.projects) {
   assert.equal(identity.id, project.id);
   assert.equal(identity.version, project.version);
   assert.throws(() => inspectProject(file.subarray(0, 100)));
+  const abiMarker = file.indexOf(Buffer.from(`"abi":${project.abi}`));
+  assert.ok(abiMarker >= 0);
+  for (const [abi, valid] of [[2, true], [3, true], [4, false]]) {
+    const changed = Buffer.from(file); changed[abiMarker + 6] = 48 + abi;
+    if (valid) assert.equal(inspectProject(changed).abi, abi); else assert.throws(() => inspectProject(changed));
+  }
   const wrongCpu = Buffer.from(file); wrongCpu.writeUInt16LE(243, 18);
   assert.throws(() => inspectProject(wrongCpu));
   const noMetadata = Buffer.from(file);
@@ -107,6 +113,10 @@ assert.equal(row.commands.at(-1).status, "done");
 assert.ok(row.commands.find((c) => c.id === retry.id).transfer.logs.some((log) => log.message === "Transfer stopped"));
 await store.retryProjectFile("owner", "board", retry.id);
 console.log("✓ Private upload delivery, queued/sent stop, confirmation and file retry checks passed");
+await store.syncBoard({ ...report, uptime: 13, projectApi: 3, sdCard: { mounted: true, total: 32_000_000_000, free: 1_000_000 } }, 0, new AbortController().signal);
+assert.deepEqual((await store.listDevices("owner"))[0].sdCard, { mounted: true, total: 32_000_000_000, free: 1_000_000 }, "Reported SD card state must reach the console");
+await store.syncBoard({ ...report, uptime: 13, projectApi: 3 }, 0, new AbortController().signal);
+assert.equal((await store.listDevices("owner"))[0].sdCard, null, "Firmware without SD reporting must not show a stale card");
 
 
 const running = row.commands.at(-1);
@@ -139,4 +149,38 @@ assert.equal(row.pending.brightness.value, 50);
 assert.equal((await patch({ project: "analog-clock", brightness: 60 })).status, 400, "Configure must not switch native modules");
 assert.equal(row.pending.brightness.value, 50);
 console.log("✓ Duplicate crash logs, history cleanup and Configure regression checks passed");
+// SD card file manager: queue, board transfer, listing parse, upload delivery and serialization.
+const deviceFiles = new Map();
+db.deviceFile = {
+  deleteMany: async ({ where }) => { for (const [id, file] of deviceFiles) if (file.deviceId === where.deviceId && file.createdAt < where.createdAt.lt) deviceFiles.delete(id); return { count: 0 }; },
+  create: async ({ data }) => { deviceFiles.set(data.id, { ...data, createdAt: new Date() }); return data; },
+  delete: async ({ where }) => { deviceFiles.delete(where.id); },
+  findFirst: async ({ where }) => { const file = deviceFiles.get(where.id); return file?.deviceId === where.deviceId ? file : null; },
+  upsert: async ({ where, create }) => { deviceFiles.set(where.id, { ...create, createdAt: new Date() }); return create; },
+};
+await assert.rejects(() => store.queueFileCommand("owner", "board", "sd_list", { path: "/" }), /project installation/);
+row.commands = row.commands.filter((c) => c.type !== "project_install");
+assert.equal(await store.queueFileCommand("other-owner", "board", "sd_list", { path: "/" }), null);
+const listing = await store.queueFileCommand("owner", "board", "sd_list", { path: "/" });
+assert.equal(new URLSearchParams(row.commands.at(-1).arg).get("src"), `/api/device/files/${listing.job}`);
+await assert.rejects(() => store.queueFileCommand("owner", "board", "sd_mkdir", { path: "/x" }), /Another SD card operation/);
+assert.equal(await store.storeBoardTransfer("board-secret", listing.job, Buffer.from("d\t0\t0\tclips\n")), false, "Undelivered operations must not accept board data");
+await store.syncBoard({ ...report, uptime: 20 }, 0, new AbortController().signal);
+assert.equal(row.commands.find((c) => c.id === listing.job).status, "sent");
+assert.equal(await store.storeBoardTransfer("wrong-token", listing.job, Buffer.from("")), false);
+assert.ok(await store.storeBoardTransfer("board-secret", listing.job, Buffer.from("f\t12\t1700000000\tb.txt\nd\t0\t0\tclips\nf\t3\t0\ta\ttab.bin\n")));
+assert.equal((await store.fileJob("owner", "board", listing.job)).job.status, "sent");
+await store.syncBoard({ ...report, uptime: 21, acks: [{ id: listing.job, ok: true, result: "3 entries" }] }, 0, new AbortController().signal);
+const listed = await store.fileJob("owner", "board", listing.job);
+assert.deepEqual(listed.job.entries.map((e) => [e.name, e.folder, e.size]), [["clips", true, 0], ["a\ttab.bin", false, 3], ["b.txt", false, 12]], "Folders first, names may contain tabs");
+assert.equal(await store.fileJob("other-owner", "board", listing.job), null);
+const upload = await store.queueFileCommand("owner", "board", "sd_upload", { path: "/clips/a.bin" }, Buffer.from("hello"));
+const uploadArg = new URLSearchParams(row.commands.at(-1).arg);
+assert.equal(uploadArg.get("size"), "5");
+assert.equal(uploadArg.get("sha256"), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+assert.equal(await store.uploadForBoard("board-secret", upload.job), null, "Upload bytes are only served once delivered");
+await store.syncBoard({ ...report, uptime: 22 }, 0, new AbortController().signal);
+assert.equal((await store.uploadForBoard("board-secret", upload.job)).toString(), "hello");
+assert.equal(await store.uploadForBoard("wrong-token", upload.job), null);
+console.log("✓ SD card file manager queueing, board transfers and listings checks passed");
 delete globalThis.__projectTest;

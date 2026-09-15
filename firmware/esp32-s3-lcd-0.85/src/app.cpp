@@ -17,6 +17,7 @@
 #include "lang.h"
 #include "services/device_config.h"
 #include "services/led_feedback.h"
+#include "led/led_pattern.h"
 #include "services/network.h"
 #include "services/time_zones.h"
 #include "services/web_portal.h"
@@ -468,11 +469,8 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
         }
         break;
       }
-      lines = {{network.WifiSsid(), theme.muted}, {network.WifiIp(), theme.info}};
-      if (console.GetState() == ConsoleClient::State::Linked && !console.Name().empty()) {
-        lines.insert(lines.begin(), {console.Name(), theme.text});
-      }
-      break;
+      // Linked with no project: the default display stays empty (status bar only).
+      return;
     }
   }
 
@@ -621,6 +619,7 @@ MenuItems App::BuildSoundMenu() {
   };
   led_color.on_select = [this, &config]() {
     config.led_color = (config.led_color + 1) % kLedColorCount;
+    config.led_pixels.clear();  // One color for the whole ring replaces a per-LED console design.
     config.led_on = true;
     config.Save();
     ApplySettings();
@@ -880,10 +879,7 @@ MenuItems App::BuildSdCardMenu() {
   items.push_back(Info("Used", [sd]() { return sd->mounted() ? Bytes(sd->used_bytes()) : "-"; }));
 
   MenuItem mount = Item(MenuItem::Kind::Action, "Mount");
-  mount.on_select = [sd]() {
-    sd->Unmount();
-    sd->Mount();
-  };
+  mount.on_select = []() { ProjectRuntime::Get().RemountSd(); };
   items.push_back(mount);
 
   items.push_back(Back());
@@ -1180,10 +1176,13 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
-  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=2";
+  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=3";
   body += "&project_version=" + ProjectRuntime::Get().Version();
   body += "&project_sha256=" + ProjectRuntime::Get().Sha256();
   body += "&project_safe=" + std::string(ProjectRuntime::Get().SafeMode() ? "1" : "0");
+  body += "&sd=" + ProjectRuntime::Get().SdReport();
+  body += "&s.led_mode=" + config.led_mode + "&s.led_speed=" + std::to_string(config.led_speed);
+  body += "&s.led_pixels=" + config.led_pixels;  // [0-9a-f:,] only: safe in a form body
   for (size_t pos = 0; (pos = body.find('/', pos)) != std::string::npos;) body.replace(pos, 1, "%2F");
 
   const auto networks = Network::GetInstance().SavedNetworks();
@@ -1231,6 +1230,13 @@ void App::ApplyRemoteSettings(const ConsoleClient::Values& values) {
       config.led_brightness = std::clamp(n, 1, 8);
     } else if (key == "led_color") {
       config.led_color = std::clamp(n, 0, kLedColorCount - 1);
+    } else if (key == "led_mode") {
+      if (LedPattern::ValidMode(value)) config.led_mode = value;
+    } else if (key == "led_speed") {
+      config.led_speed = std::clamp(n, 1, 10);
+    } else if (key == "led_pixels") {
+      config.led_pixels.clear();
+      for (char ch : value.substr(0, 160)) if (isxdigit(static_cast<unsigned char>(ch)) || ch == ':' || ch == ',') config.led_pixels += tolower(ch);
     } else if (key == "sleep_s") {
       config.sleep_seconds = std::max(0, n);
     } else if (key == "power_off_s") {

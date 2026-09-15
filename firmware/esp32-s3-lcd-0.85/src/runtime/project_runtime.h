@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <functional>
 #include <string>
 #include <vector>
 #include <freertos/FreeRTOS.h>
@@ -7,6 +8,8 @@
 #include "elf_loader/loader_config.h"
 #include "elf_loader/esp_elf.h"
 class Canvas;
+class HTTPClient;
+class NetworkClient;
 struct Theme;
 
 // Generic loader: it knows only the display ABI, never a project's implementation or id.
@@ -26,6 +29,13 @@ class ProjectRuntime {
   bool SafeMode() const { return safe_mode_; }
   bool Busy() const { return busy_ || testing_; }
   int Progress() const { return progress_; }
+  // `mounted|total bytes|free bytes` of the SD card, as last checked.
+  std::string SdReport() const;
+  // Re-mounts the card after closing the running module's open asset files.
+  bool RemountSd();
+  // Closes asset files and pauses the module's SD access while the file manager changes the card.
+  void LockSd();
+  void RefreshSd();
  private:
   static void DownloadTask(void* arg);
   void Log(const std::string& message, bool error = false);
@@ -35,9 +45,20 @@ class ProjectRuntime {
   bool Activate(const std::vector<uint8_t>& bytes, const Metadata& metadata);
   bool RestorePrevious(const std::string& reason);
   void RecordHealthyFrame();
+  // SD card assets live in /projects/<id>/<version>; `.complete` holds the verified index SHA-256.
+  bool AssetsReady(const std::string& id, const std::string& version, const std::string& digest);
+  void UseAssets(const std::string& digest);
+  void CleanupAssets();
+  std::string Fetch(HTTPClient& http, NetworkClient& client, const std::string& url, size_t expected, uint32_t limit_ms, const std::function<bool(const uint8_t*, size_t)>& sink);
+  std::string InstallAssets(HTTPClient& http, NetworkClient& client);
   esp_elf_t elf_{};
   bool loaded_ = false, mounted_ = false, testing_ = false, ack_ready_ = false, safe_mode_ = false, healthy_recorded_ = false;
   bool ack_ok_ = false;
+  bool sd_required_ = false, sd_ready_ = false, sd_locked_ = false;
+  int abi_ = 0;
+  uint32_t sd_checked_at_ = 0;
+  uint64_t sd_total_ = 0, sd_free_ = 0;
+  std::string assets_digest_;
   struct Entry { int seq; bool error; std::string message; };
   std::vector<Entry> logs_;
   SemaphoreHandle_t log_mutex_ = nullptr;
@@ -49,9 +70,12 @@ class ProjectRuntime {
   uint32_t data_at_ = 0;
   std::atomic<bool> busy_{false}, done_{false};
   std::atomic<int> progress_{0}, stage_{0};
-  std::atomic<size_t> received_{0};
+  std::atomic<uint64_t> received_{0};
   std::atomic<bool> cancel_{false};
   std::string command_id_, target_id_, target_version_, url_, md5_, expected_sha256_, error_, token_, stop_id_;
+  std::string assets_url_, assets_sha256_;
+  uint64_t assets_bytes_ = 0;
+  std::atomic<uint64_t> total_size_{0};
   bool insecure_ = false;
   size_t expected_size_ = 0;
   uint32_t first_frame_at_ = 0;

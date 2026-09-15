@@ -49,6 +49,8 @@ class Canvas {
   // Angles in degrees, 0 = right, 90 = down.
   void Arc(int cx, int cy, int r, int start_deg, int end_deg, int thickness, uint16_t color);
   void Line(int x0, int y0, int x1, int y1, int thickness, uint16_t color);
+  // Copies one row of `w` big-endian RGB565 pixels (canvas byte order), clipped.
+  void BlitRow(int x, int y, int w, const uint8_t* pixels);
 
   // 5×7 font. Returns the x after the text.
   int Text(int x, int y, const char* text, uint16_t color, int scale = 1);

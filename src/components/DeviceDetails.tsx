@@ -16,6 +16,7 @@ import {
 } from "@/lib/device-client";
 import type { DeviceCommand, DeviceSample, PublicDevice, TestResult } from "@/lib/device-types";
 import { errorMessage } from "@/lib/esp";
+import { formatBytes } from "@/components/SdFileManager";
 
 export type DetailsTab = "status" | "check" | "wifi" | "firmware" | "activity";
 const TABS: { id: DetailsTab; label: string }[] = [
@@ -119,7 +120,14 @@ function StatusPanel({ device }: { device: PublicDevice }) {
         <Info label="Free memory" value={device.heap ? `${Math.round(device.heap / 1024)} KB` : "—"} />
         <Info label="IP address" value={device.ip || "—"} />
         <Info label="MAC" value={device.mac} />
+        <Info label="SD card" value={!device.sdCard ? "Not reported" : device.sdCard.mounted ? `${formatBytes(device.sdCard.free)} free` : "No card"} />
+        <Info label="SD capacity" value={device.sdCard?.mounted ? `${formatBytes(device.sdCard.total)} · ${Math.round(((device.sdCard.total - device.sdCard.free) / Math.max(1, device.sdCard.total)) * 100)}% used` : "—"} />
       </dl>
+      {device.sdCard?.mounted && (
+        <div aria-label="SD card usage" className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+          <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.min(100, ((device.sdCard.total - device.sdCard.free) / Math.max(1, device.sdCard.total)) * 100)}%` }} />
+        </div>
+      )}
       <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Last 6 hours</p>
       {recent.length < 2 ? (
         <p className="text-sm text-zinc-500">Charts appear after a few minutes online.</p>
@@ -390,6 +398,13 @@ const COMMAND_LABELS: Record<DeviceCommand["type"], string> = {
   ota: "Firmware update",
   wifi_add: "Add backup network",
   wifi_forget: "Forget backup network",
+  sd_list: "SD card: open folder",
+  sd_download: "SD card: download",
+  sd_upload: "SD card: upload",
+  sd_delete: "SD card: delete",
+  sd_mkdir: "SD card: new folder",
+  sd_rename: "SD card: rename",
+  sd_format: "SD card: format",
 };
 
 function ActivityPanel({ commands }: { commands: DeviceCommand[] }) {
@@ -403,6 +418,7 @@ function ActivityPanel({ commands }: { commands: DeviceCommand[] }) {
               {COMMAND_LABELS[command.type]}
               {command.type === "notify" && <span className="font-normal text-zinc-500"> “{command.arg}”</span>}
               {command.type === "test" && <span className="font-normal text-zinc-500"> · {command.arg}</span>}
+              {command.type.startsWith("sd_") && command.type !== "sd_format" && <span className="font-normal text-zinc-500"> · {new URLSearchParams(command.arg).get("path")}</span>}
             </p>
             <p className="truncate text-xs text-zinc-500">
               {timeAgo(command.createdAt)}

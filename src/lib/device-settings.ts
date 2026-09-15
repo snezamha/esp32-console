@@ -16,6 +16,10 @@ export type DeviceSettings = {
   led_feedback: boolean;
   led_brightness: number;
   led_color: number;
+  led_mode: LedMode;
+  led_speed: number;
+  /** `rrggbb:level:blink` per LED, comma-separated, clockwise from LED 0; "" = all LEDs in led_color. */
+  led_pixels: string;
   sleep_s: number;
   power_off_s: number;
   rotate: boolean;
@@ -39,6 +43,9 @@ export const DEFAULT_SETTINGS: DeviceSettings = {
   led_feedback: false,
   led_brightness: 4,
   led_color: 0,
+  led_mode: "static",
+  led_speed: 5,
+  led_pixels: "",
   sleep_s: 60,
   power_off_s: 0,
   rotate: false,
@@ -49,6 +56,10 @@ export const DEFAULT_SETTINGS: DeviceSettings = {
 };
 
 export const LED_COLORS = ["White", "Red", "Green", "Blue", "Cyan", "Purple", "Orange"];
+export const LED_MODES = ["static", "blink", "breathe", "spin", "chase", "rainbow"] as const;
+export type LedMode = (typeof LED_MODES)[number];
+export const LED_COUNT = 8;
+const LED_PIXELS = /^[0-9a-f]{6}:\d{1,3}:[01](,[0-9a-f]{6}:\d{1,3}:[01]){7}$/;
 export const SLEEP_OPTIONS = [10, 30, 60, 300, 0];
 export const POWER_OFF_OPTIONS = [60, 300, 600, 0];
 
@@ -109,6 +120,13 @@ export function sanitizeSettings(input: Record<string, unknown>, base: DeviceSet
   bool("led_feedback");
   num("led_brightness", 1, 8);
   num("led_color", 0, LED_COLORS.length - 1);
+  if (typeof input.led_mode === "string" && (LED_MODES as readonly string[]).includes(input.led_mode)) out.led_mode = input.led_mode as LedMode;
+  num("led_speed", 1, 10);
+  if (typeof input.led_pixels === "string") {
+    const pixels = input.led_pixels.toLowerCase();
+    if (pixels === "") out.led_pixels = "";
+    else if (LED_PIXELS.test(pixels)) out.led_pixels = pixels.split(",").map((pixel) => { const [color, level, blink] = pixel.split(":"); return `${color}:${Math.min(100, Number(level))}:${blink}`; }).join(",");
+  }
   oneOf("sleep_s", SLEEP_OPTIONS);
   oneOf("power_off_s", POWER_OFF_OPTIONS);
   bool("rotate");

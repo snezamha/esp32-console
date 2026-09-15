@@ -12,7 +12,17 @@ import type { ProjectConfigs } from "@/lib/project-config";
  *   wifi_add            arg: `ssid=<ssid>&password=<password>` (saved as the backup network)
  *   wifi_forget         forget the backup network
  */
-export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test" | "ota" | "wifi_add" | "wifi_forget" | "project_install" | "project_stop";
+export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test" | "ota" | "wifi_add" | "wifi_forget" | "project_install" | "project_stop" | FileCommandType;
+
+/**
+ * SD card file manager (firmware 1.1.1+). Arguments are form-encoded: `path`, plus `to` (rename),
+ * `src` (transfer URL on the console) and `size`/`sha256` (upload). See src/services/sd_files.h.
+ */
+export type FileCommandType = "sd_list" | "sd_download" | "sd_upload" | "sd_delete" | "sd_mkdir" | "sd_rename" | "sd_format";
+/** First firmware with the SD card file manager and the LED ring designer. */
+export const SD_FILES_FIRMWARE = "1.1.1";
+export type SdEntry = { name: string; folder: boolean; size: number; modified: number };
+export type FileJob = { id: string; type: FileCommandType; status: DeviceCommand["status"]; result: string; entries?: SdEntry[] };
 
 export type DeviceCommand = {
   id: string;
@@ -37,6 +47,8 @@ export type OtaStatus = {
   version: string;
   updatedAt: number;
 };
+
+export type SdCardStatus = { mounted: boolean; total: number; free: number };
 
 export type DeviceSample = { t: number; battery: number; rssi: number; heap: number };
 
@@ -64,6 +76,8 @@ export type PublicDevice = {
   activeProjectVersion: string;
   activeProjectSha256: string;
   projectSafeMode: boolean;
+  /** SD card as last checked by the board (boot, install attempt, menu mount); null on older firmware. */
+  sdCard: SdCardStatus | null;
   projectApi: number;
   projectSupported: boolean;
   /** False until the board uploaded its settings; until then `settings` are defaults. */

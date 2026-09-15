@@ -30,6 +30,7 @@ export function Sheet({
   subtitle,
   children,
   footer,
+  wide,
 }: {
   open: boolean;
   onClose: () => void;
@@ -37,6 +38,8 @@ export function Sheet({
   subtitle?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  /** Room for lists and editors instead of a compact form. */
+  wide?: boolean;
 }) {
   return (
     <Dialog open={open} onClose={onClose} className="relative z-50">
@@ -44,7 +47,7 @@ export function Sheet({
       <div className="fixed inset-0 flex items-end justify-center p-4 sm:items-center">
         <DialogPanel
           transition
-          className="flex max-h-[90dvh] w-full max-w-md flex-col gap-5 rounded-2xl bg-white p-5 shadow-xl transition duration-200 ease-out data-closed:translate-y-4 data-closed:opacity-0 dark:bg-zinc-900"
+          className={`flex max-h-[90dvh] w-full ${wide ? "max-w-2xl" : "max-w-md"} flex-col gap-5 rounded-2xl bg-white p-5 shadow-xl transition duration-200 ease-out data-closed:translate-y-4 data-closed:opacity-0 dark:bg-zinc-900`}
         >
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 space-y-1">

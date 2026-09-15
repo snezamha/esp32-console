@@ -15,16 +15,32 @@ export type ProjectSettingDefinition = {
   max?: number;
   step?: number;
 };
-export type ProjectDefinition = (typeof manifest.projects)[number] & {
+// Declared rather than inferred from the manifest JSON: inference breaks as soon as catalog entries
+// differ in shape (for example one project with SD card assets and one without).
+export type ProjectDefinition = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  board: string;
+  abi: number;
+  path: string;
+  size: number;
+  md5: string;
+  sha256: string;
   category: string;
   icon: string;
   accent: string;
   minimumFirmware: string;
   capabilities: string[];
   settings: ProjectSettingDefinition[];
+  /** Present when the project installs files onto the board's SD card (ABI 3). */
+  storage?: ProjectStorage;
+  assets?: { path: string; size: number; sha256: string };
 };
+export type ProjectStorage = { sd: true; bytes: number; files: number };
 
-export const PROJECT_DEFINITIONS = manifest.projects as ProjectDefinition[];
+export const PROJECT_DEFINITIONS = manifest.projects as unknown as ProjectDefinition[];
 
 export function projectDefinition(id: string) {
   return PROJECT_DEFINITIONS.find((project) => project.id === id);

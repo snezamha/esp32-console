@@ -14,6 +14,9 @@ void DeviceConfig::Load() {
   led_feedback = s.GetBool("led_fb", led_feedback);
   led_brightness = s.GetInt("led_level", led_brightness);
   led_color = s.GetInt("led_color", led_color);
+  led_mode = s.GetString("led_mode", led_mode.c_str());
+  led_speed = s.GetInt("led_speed", led_speed);
+  led_pixels = s.GetString("led_px", "");
   wifi_on = s.GetBool("wifi_on", wifi_on);
   wifi_ssid = s.GetString("wifi_ssid", "");
   wifi_password = s.GetString("wifi_pass", "");
@@ -36,6 +39,9 @@ void DeviceConfig::Save() {
   s.SetBool("led_fb", led_feedback);
   s.SetInt("led_level", led_brightness);
   s.SetInt("led_color", led_color);
+  s.SetString("led_mode", led_mode);
+  s.SetInt("led_speed", led_speed);
+  s.SetString("led_px", led_pixels);
   s.SetBool("wifi_on", wifi_on);
   s.SetString("wifi_ssid", wifi_ssid);
   s.SetString("wifi_pass", wifi_password);

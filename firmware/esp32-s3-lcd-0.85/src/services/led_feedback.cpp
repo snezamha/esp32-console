@@ -41,6 +41,7 @@ void LedFeedback::Loop(uint32_t now_ms, bool paused) {
   if (mode == Mode::Base) {
     // Restore the user's LED setting once when a cue ends.
     if (mode_ != Mode::Base && !paused) board.ApplyLed();
+    else if (!paused) board.AnimateLed(now_ms);
     mode_ = mode;
     return;
   }

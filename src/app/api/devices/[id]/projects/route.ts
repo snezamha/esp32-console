@@ -19,7 +19,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
     const bytes = Buffer.from(await file.arrayBuffer());
     const meta = inspectProject(bytes);
     if (meta.board !== device.board) throw new Error("This project targets another board.");
-    const arg = new URLSearchParams({ id: meta.id, version: meta.version, path: "/api/devices/", abi: "2", size: String(bytes.length), md5: createHash("md5").update(bytes).digest("hex"), sha256: createHash("sha256").update(bytes).digest("hex") }).toString();
+    if (meta.abi > device.projectApi) throw new Error(`This project needs display ABI ${meta.abi}. Update the base firmware first.`);
+    const arg = new URLSearchParams({ id: meta.id, version: meta.version, path: "/api/devices/", abi: String(meta.abi), size: String(bytes.length), md5: createHash("md5").update(bytes).digest("hex"), sha256: createHash("sha256").update(bytes).digest("hex") }).toString();
     const updated = await queueCommand(user.id, id, "project_install", arg, "", { name: meta.name, version: meta.version, size: bytes.length, bytes });
     return Response.json({ device: updated }, { status: 202 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Upload failed." }, { status: 400 }); }

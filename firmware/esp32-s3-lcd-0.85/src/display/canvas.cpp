@@ -48,6 +48,14 @@ void Canvas::FillRect(int x, int y, int w, int h, uint16_t color) {
   }
 }
 
+void Canvas::BlitRow(int x, int y, int w, const uint8_t* pixels) {
+  if (y < clip_y0_ || y >= clip_y1_) return;
+  const int x0 = std::max(x, clip_x0_), x1 = std::min(x + w, clip_x1_);
+  if (x0 >= x1) return;
+  memcpy(buf_ + (static_cast<size_t>(y) * width_ + x0) * 2, pixels + (x0 - x) * 2,
+         static_cast<size_t>(x1 - x0) * 2);
+}
+
 void Canvas::Rect(int x, int y, int w, int h, uint16_t color) {
   FillRect(x, y, w, 1, color);
   FillRect(x, y + h - 1, w, 1, color);

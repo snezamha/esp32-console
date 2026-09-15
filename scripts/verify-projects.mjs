@@ -28,7 +28,28 @@ for (const project of manifest.projects) {
       }
     }
   }
-  console.log(`✓ ${project.id}: independent Xtensa ELF, no unresolved imports, valid hashes`);
+  if (project.assets) {
+    assert.equal(project.abi, 3, `${project.id}: SD card assets require ABI 3`);
+    const index = readFileSync(join(root, "public", project.assets.path));
+    assert.equal(index.length, project.assets.size);
+    assert.equal(createHash("sha256").update(index).digest("hex"), project.assets.sha256);
+    const base = join(root, "public", project.assets.path.replace(/assets\.txt$/, "assets"));
+    let total = 0, files = 0;
+    for (const line of index.toString("utf8").split("\n").filter(Boolean)) {
+      const [name, size, sha256] = line.split("|");
+      assert.ok(!name.includes("..") && !name.startsWith("/"), `${project.id}: unsafe asset name ${name}`);
+      const bytes = readFileSync(join(base, name));
+      assert.equal(bytes.length, Number(size), `${project.id}: ${name} size`);
+      assert.equal(createHash("sha256").update(bytes).digest("hex"), sha256, `${project.id}: ${name} hash`);
+      if (/\.(img|vid)$/.test(name)) {
+        assert.equal(bytes.subarray(0, 4).toString("ascii"), "EVM1", `${project.id}: ${name} media header`);
+        assert.equal(bytes.length, 16 + bytes.readUInt16LE(4) * bytes.readUInt16LE(6) * bytes.readUInt16LE(8) * 2, `${project.id}: ${name} media length`);
+      }
+      total += bytes.length; files++;
+    }
+    assert.deepEqual(project.storage, { sd: true, bytes: total, files }, `${project.id}: storage summary`);
+  } else assert.equal(project.abi, 2, `${project.id}: projects without SD card assets stay on ABI 2`);
+  console.log(`✓ ${project.id}: independent Xtensa ELF, no unresolved imports, valid hashes${project.assets ? `, ${project.storage.files} verified SD card files` : ""}`);
 }
 function verifyBase(dir) {
   for (const entry of readdirSync(dir, {withFileTypes: true})) {

@@ -59,9 +59,22 @@ model Device {
   /// [primary ssid, backup ssid].
   networks         Json    @default("[]")
   projectFiles     ProjectFile[]
+  files            DeviceFile[]
 
   @@index([owner])
   @@index([mac])
+}
+
+/// Short-lived bytes of an SD card file manager operation, keyed by its command id: a browser
+/// upload waiting for the board, or a folder listing / file the board sent for the browser.
+model DeviceFile {
+  id        String   @id
+  deviceId  String
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  bytes     Bytes
+  createdAt DateTime @default(now())
+
+  @@index([deviceId, createdAt])
 }
 
 /// A user-supplied project binary. Commands only retain this row's id, so retries do not copy

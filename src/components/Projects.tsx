@@ -323,20 +323,36 @@ function ProjectTabPanel({
   onSave: () => void;
   onInstall: () => void;
 }) {
+  const storage = (project as Partial<ProjectDefinition>).storage;
   return (
     <TabPanel className={cardClass + " space-y-4 p-4"}>
       <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">{project.name}</h3>{device.activeProject === project.id && <span className="text-xs text-emerald-600">Active on board</span>}</div>
       <p className="text-xs text-zinc-500">{project.description}</p>
-      {"version" in project && <><div className="flex flex-wrap gap-2 text-[11px] text-zinc-500"><span>Catalog v{project.version}</span>{device.activeProject === project.id && device.activeProjectVersion && <span>Installed v{device.activeProjectVersion}</span>}<span>{(project.size / 1024).toFixed(1)} KB</span></div><details className="text-xs text-zinc-500"><summary className="cursor-pointer">Package details</summary><p className="mt-1 break-all">SHA-256 {project.sha256}<br/><a href={project.path} download className="text-blue-600 underline">Download verified catalog file</a></p></details></>}
+      {"version" in project && <><div className="flex flex-wrap gap-2 text-[11px] text-zinc-500"><span>Catalog v{project.version}</span>{device.activeProject === project.id && device.activeProjectVersion && <span>Installed v{device.activeProjectVersion}</span>}<span>{(project.size / 1024).toFixed(1)} KB</span>{storage && <span>SD card · {megabytes(storage.bytes)} · {storage.files} files</span>}</div><details className="text-xs text-zinc-500"><summary className="cursor-pointer">Package details</summary><p className="mt-1 break-all">SHA-256 {project.sha256}<br/><a href={project.path} download className="text-blue-600 underline">Download verified catalog file</a></p></details></>}
+      {storage && <SdCardNotice device={device} bytes={storage.bytes} />}
       {project.id !== "none" && <ProjectSettingsForm project={project as ProjectDefinition} value={config} disabled={busy} onChange={onConfig} />}
       {project.id === "none" && <p className="text-xs text-zinc-500">Restore the original firmware display while keeping your board settings. No additional file is required.</p>}
       {saved?.project === project.id && <p role="status" className="text-xs text-emerald-600">{saved.message}</p>}
       <div className="flex flex-wrap gap-2">
         {project.id !== "none" && device.activeProject === project.id && <Button disabled={busy || loading || stopping} onClick={onSave} className="h-10 rounded-xl border border-zinc-300 px-4 text-sm">Save changes</Button>}
-        <Button disabled={disabled || (project.id !== "none" && !modern) || (project.id === "none" && device.activeProject === "none")} onClick={onInstall} className={accentButton + " h-10 px-4"}>{device.activeProject === project.id ? project.id === "none" ? "Active project" : "Save & reinstall" : project.id === "none" ? "Restore default display" : `Save & load ${project.name}`}</Button>
+        <Button disabled={disabled || (project.id !== "none" && !modern) || ((project as Partial<ProjectDefinition>).abi ?? 0) > device.projectApi || (project.id === "none" && device.activeProject === "none")} onClick={onInstall} className={accentButton + " h-10 px-4"}>{device.activeProject === project.id ? project.id === "none" ? "Active project" : "Save & reinstall" : project.id === "none" ? "Restore default display" : `Save & load ${project.name}`}</Button>
       </div>
     </TabPanel>
   );
+}
+
+function megabytes(bytes: number) {
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+}
+
+/** Mirrors the board's own check; the board re-mounts the card and decides when installation starts. */
+function SdCardNotice({ device, bytes }: { device: PublicDevice; bytes: number }) {
+  const needed = bytes + 1024 * 1024;
+  const warn = "rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+  if (device.projectApi < 3) return <p className={warn}>This project keeps its images and videos on a microSD card. Update the base firmware in Devices → Details → Firmware to add SD card project support.</p>;
+  if (!device.sdCard?.mounted) return <p className={warn}>This project installs {megabytes(bytes)} of files onto a microSD card, and the board has not reported a card. Insert a FAT32 card; the board checks again when you install and refuses without one.</p>;
+  if (device.sdCard.free < needed) return <p className={warn}>The board’s SD card reported {megabytes(device.sdCard.free)} free, but this project needs {megabytes(needed)}. Free up space or use a larger card; files from an identical earlier installation are reused.</p>;
+  return <p className="text-xs text-emerald-600">SD card ready · {megabytes(device.sdCard.free)} free of {megabytes(device.sdCard.total)}. The base firmware and project flash stay untouched by these files.</p>;
 }
 
 function UploadPanel({
@@ -368,7 +384,7 @@ function UploadPanel({
   return (
     <section className={cardClass + " space-y-3 p-4"}>
       <h3 className="text-sm font-semibold">Upload a project file</h3>
-      <p id="project-file-help" className="text-xs text-zinc-500">Choose one self-contained project ELF. No companion files are needed. Maximum 128 KB. The file contents are validated after selection.</p>
+      <p id="project-file-help" className="text-xs text-zinc-500">Choose one self-contained project ELF. No companion files are needed. Maximum 128 KB. Projects with SD card images and videos are installed from the catalog. The file contents are validated after selection.</p>
       <label
         className={`${dragging ? "border-blue-500 bg-blue-50 dark:bg-blue-950" : "border-zinc-300 dark:border-zinc-700"} ${busy ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-blue-400"} flex min-h-28 items-center justify-center rounded-xl border-2 border-dashed p-4 text-center transition`}
         onDragEnter={(event) => { event.preventDefault(); if (!busy) setDragging(true); }}

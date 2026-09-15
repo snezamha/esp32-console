@@ -1,5 +1,5 @@
 import { expireProjectCommands, projectPending, type ProjectTransfer } from "@/lib/project-transfers";
-import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { Device as DeviceRow, Pairing as PairingRow, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { DEFAULT_SETTINGS, type DeviceSettings } from "@/lib/device-settings";
@@ -7,9 +7,13 @@ import { projectConfigsWithDefaults, type ProjectConfigs } from "@/lib/project-c
 import type {
   CommandType,
   DeviceCommand,
+  FileCommandType,
+  FileJob,
+  SdEntry,
   DeviceSample,
   OtaStatus,
   PublicDevice,
+  SdCardStatus,
   TestResult,
 } from "@/lib/device-types";
 
@@ -24,7 +28,12 @@ const MAX_COMMANDS = 20;
 /** How often a held request re-checks the database while waiting for a change. */
 const POLL_INTERVAL_MS = 1500;
 /** Commands the board confirms with an explicit ack; the rest are done once delivered. */
-const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install", "project_stop"];
+const FILE_COMMANDS: FileCommandType[] = ["sd_list", "sd_download", "sd_upload", "sd_delete", "sd_mkdir", "sd_rename", "sd_format"];
+const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install", "project_stop", ...FILE_COMMANDS];
+/** A delivered SD card operation without an answer after this long is treated as lost. */
+const FILE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
+const FILE_TTL_MS = 30 * 60 * 1000;
+export const MAX_DEVICE_FILE_BYTES = 4 * 1024 * 1024;
 
 type PendingEdits = Partial<Record<keyof DeviceSettings, { value: DeviceSettings[keyof DeviceSettings]; rev: number }>>;
 const json = (value: unknown) => value as Prisma.InputJsonValue;
@@ -65,6 +74,7 @@ function toPublic(row: DeviceRow): PublicDevice {
     activeProjectVersion: String((row.reported as Record<string, unknown>)._project_version ?? ""),
     activeProjectSha256: String((row.reported as Record<string, unknown>)._project_sha256 ?? ""),
     projectSafeMode: (row.reported as Record<string, unknown>)._project_safe === 1,
+    sdCard: ((row.reported as Record<string, unknown>)._sd as SdCardStatus | undefined) ?? null,
     settingsReported: row.settingsReported,
     commands: expireProjectCommands(row.commands as DeviceCommand[]).slice(-10).map((entry) => { const command = { ...entry }; delete command.fileId; return command; }),
     tests: row.tests as Record<string, TestResult>,
@@ -133,6 +143,7 @@ export type BoardReport = {
   projectVersion: string;
   projectSha256: string;
   projectSafeMode: boolean;
+  sdCard: SdCardStatus | null;
   tests: Record<string, TestResult>;
   ota: Pick<OtaStatus, "state" | "progress" | "error"> | null;
   networks: string[] | null;
@@ -181,6 +192,7 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
       _project_version: report.projectVersion,
       _project_sha256: report.projectSha256,
       _project_safe: report.projectSafeMode ? 1 : 0,
+      ...(report.sdCard ? { _sd: report.sdCard } : {}),
     });
     data.settingsReported = true;
   }
@@ -576,4 +588,99 @@ export async function clearProjectHistory(owner: string, id: string): Promise<Pu
   });
   if (row?.owner === owner && deletedFileIds.length) await db.projectFile.deleteMany({ where: { id: { in: deletedFileIds }, deviceId: id } });
   return row?.owner === owner ? toPublic(row) : null;
+}
+
+// ---------------------------------------------------------------------------
+// SD card file manager
+
+function fileJobPending(command: DeviceCommand, now = Date.now()) {
+  return FILE_COMMANDS.includes(command.type as FileCommandType) && (command.status === "queued" || (command.status === "sent" && now - command.updatedAt < FILE_JOB_TIMEOUT_MS));
+}
+
+/** Queues one SD card operation. `upload` holds the bytes the board fetches for sd_upload. */
+export async function queueFileCommand(owner: string, id: string, type: FileCommandType, params: Record<string, string>, upload?: Buffer): Promise<{ device: PublicDevice; job: string } | null> {
+  const owned = await db.device.findFirst({ where: { id, owner }, select: { id: true } });
+  if (!owned) return null;
+  const now = Date.now();
+  const job = randomBytes(4).toString("hex");
+  const values = new URLSearchParams(params);
+  if (type === "sd_list" || type === "sd_download" || type === "sd_upload") values.set("src", `/api/device/files/${job}`);
+  if (upload) {
+    values.set("size", String(upload.length));
+    values.set("sha256", createHash("sha256").update(upload).digest("hex"));
+  }
+  await db.deviceFile.deleteMany({ where: { deviceId: id, createdAt: { lt: new Date(now - FILE_TTL_MS) } } });
+  if (upload) await db.deviceFile.create({ data: { id: job, deviceId: id, bytes: Uint8Array.from(upload) } });
+  let row: DeviceRow | null;
+  try {
+    row = await mutateDevice(id, (current) => {
+      if (current.owner !== owner) return null;
+      let commands = expireProjectCommands(current.commands as DeviceCommand[]);
+      if (commands.some((command) => fileJobPending(command, now))) throw new Error("Another SD card operation is running. Try again when it finishes.");
+      if (commands.some((command) => command.type === "project_install" && projectPending(command))) throw new Error("A project installation is using the SD card.");
+      // File browsing creates many commands; keep only the latest few finished ones in the history.
+      const finished = commands.filter((command) => FILE_COMMANDS.includes(command.type as FileCommandType) && !fileJobPending(command, now));
+      const dropped = new Set(finished.slice(0, -4).map((command) => command.id));
+      commands = commands
+        .filter((command) => !dropped.has(command.id))
+        .map((command) => FILE_COMMANDS.includes(command.type as FileCommandType) && command.status === "sent" && !fileJobPending(command, now) ? { ...command, status: "failed" as const, result: "The board did not answer.", updatedAt: now } : command);
+      commands = [...commands, { id: job, type, arg: values.toString(), status: "queued" as const, result: "", createdAt: now, updatedAt: now }].slice(-MAX_COMMANDS);
+      return { commands: json(commands) };
+    });
+  } catch (error) {
+    if (upload) await db.deviceFile.delete({ where: { id: job } }).catch(() => {});
+    throw error;
+  }
+  if (!row) {
+    if (upload) await db.deviceFile.delete({ where: { id: job } }).catch(() => {});
+    return null;
+  }
+  return { device: toPublic(row), job };
+}
+
+/** State of one SD card operation for its owner; listings are parsed once the board answered. */
+export async function fileJob(owner: string, id: string, job: string): Promise<{ job: FileJob; bytes: Buffer | null; path: string } | null> {
+  const row = await db.device.findFirst({ where: { id, owner } });
+  const command = (row?.commands as DeviceCommand[] | undefined)?.find((entry) => entry.id === job && FILE_COMMANDS.includes(entry.type as FileCommandType));
+  if (!row || !command) return null;
+  const expired = command.status === "sent" && Date.now() - command.updatedAt >= FILE_JOB_TIMEOUT_MS;
+  const status = expired ? "failed" : command.status;
+  const result: FileJob = { id: job, type: command.type as FileCommandType, status, result: expired ? "The board did not answer." : command.result };
+  let bytes: Buffer | null = null;
+  if (status === "done" && (command.type === "sd_list" || command.type === "sd_download")) {
+    const file = await db.deviceFile.findFirst({ where: { id: job, deviceId: id }, select: { bytes: true } });
+    bytes = file ? Buffer.from(file.bytes) : null;
+    if (command.type === "sd_list") result.entries = bytes ? parseListing(bytes.toString("utf8")) : [];
+  }
+  return { job: result, bytes, path: new URLSearchParams(command.arg).get("path") ?? "" };
+}
+
+function parseListing(text: string): SdEntry[] {
+  return text.split("\n").flatMap((line) => {
+    const [kind, size, modified, ...name] = line.split("\t");
+    if ((kind !== "d" && kind !== "f") || !name.length) return [];
+    return [{ name: name.join("\t"), folder: kind === "d", size: Number(size) || 0, modified: (Number(modified) || 0) * 1000 }];
+  }).sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name));
+}
+
+/** Board side: the command must be a delivered transfer of this board. */
+async function boardTransfer(token: string, job: string, types: FileCommandType[]) {
+  if (!token) return null;
+  const row = await db.device.findUnique({ where: { token } });
+  const command = (row?.commands as DeviceCommand[] | undefined)?.find((entry) => entry.id === job && types.includes(entry.type as FileCommandType) && entry.status === "sent");
+  return row && command ? { row, command } : null;
+}
+
+export async function uploadForBoard(token: string, job: string): Promise<Buffer | null> {
+  const found = await boardTransfer(token, job, ["sd_upload"]);
+  if (!found) return null;
+  const file = await db.deviceFile.findFirst({ where: { id: job, deviceId: found.row.id }, select: { bytes: true } });
+  return file ? Buffer.from(file.bytes) : null;
+}
+
+export async function storeBoardTransfer(token: string, job: string, bytes: Buffer): Promise<boolean> {
+  const found = await boardTransfer(token, job, ["sd_list", "sd_download"]);
+  if (!found || bytes.length > MAX_DEVICE_FILE_BYTES) return false;
+  await db.deviceFile.upsert({ where: { id: job }, create: { id: job, deviceId: found.row.id, bytes: Uint8Array.from(bytes) }, update: { bytes: Uint8Array.from(bytes), createdAt: new Date() } });
+  return true;
 }

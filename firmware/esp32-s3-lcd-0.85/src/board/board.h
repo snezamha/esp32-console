@@ -37,6 +37,8 @@ class Board {
   bool IsSleeping() const { return sleeping_; }
   // Applies LED ring and power button settings from DeviceConfig.
   void ApplyLed();
+  // Redraws an animated LED design (effects or blinking LEDs); no-op for static designs.
+  void AnimateLed(uint32_t now_ms);
   void ApplyPowerHold();
 
   std::string GetBoardType() const { return "esp32-s3-lcd-0.85"; }
@@ -92,6 +94,7 @@ class Board {
   PowerManager* power_manager_ = nullptr;
   LcdDisplay* display_ = nullptr;
   LedRing* led_ring_ = nullptr;
+  uint32_t led_frame_ms_ = 0;
   BoxAudioCodec* audio_codec_ = nullptr;
   SdCard* sd_card_ = nullptr;
   int idle_seconds_ = 0;
