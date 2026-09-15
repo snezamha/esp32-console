@@ -1388,7 +1388,7 @@ void App::PrintInfo() {
       "\"flash\":%lu,\"psram\":%lu,\"free_heap\":%lu,\"theme\":\"%s\",\"brightness\":%u,"
       "\"volume\":%d,\"sleep_s\":%d,\"power_off_s\":%d,\"rotate\":%s,\"led_on\":%s,"
       "\"wifi\":\"%s\",\"ip\":\"%s\",\"ble\":%s,\"tz\":\"%s\",\"time\":\"%s\",\"uptime\":%lu,"
-      "\"console\":\"%s\",\"reset\":\"%s\",\"min_heap\":%lu}\n",
+      "\"console\":\"%s\",\"reset\":\"%s\",\"min_heap\":%lu,\"max_block\":%lu}\n",
       FIRMWARE_NAME, FIRMWARE_VERSION, board.GetBoardType().c_str(), ESP.getChipModel(),
       ESP.getChipRevision(), ESP.getChipCores(), uint8_t(mac), uint8_t(mac >> 8),
       uint8_t(mac >> 16), uint8_t(mac >> 24), uint8_t(mac >> 32), uint8_t(mac >> 40),
@@ -1399,5 +1399,5 @@ void App::PrintInfo() {
       config.led_on ? "true" : "false", network.WifiStatus().c_str(), network.WifiIp().c_str(),
       config.ble_on ? "true" : "false", config.timezone.c_str(), LocalTime().c_str(), millis() / 1000,
       ConsoleClient::GetInstance().StateText(), ResetReasonText(),
-      (unsigned long)ESP.getMinFreeHeap());
+      (unsigned long)ESP.getMinFreeHeap(), (unsigned long)ESP.getMaxAllocHeap());
 }

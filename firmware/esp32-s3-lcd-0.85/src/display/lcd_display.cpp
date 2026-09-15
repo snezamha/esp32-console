@@ -64,8 +64,8 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
       heap_caps_malloc(width_ * height_ * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   assert(buffer_ != nullptr);
   canvas_ = new Canvas(width_, height_, buffer_);
-  rotated_buffer_ = static_cast<uint8_t*>(
-      heap_caps_malloc(width_ * height_ * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  // rotated_buffer_ stays unallocated until the display is actually flipped: it is another full
+  // frame of DMA-capable internal RAM, which Wi-Fi and the console's TLS handshake compete for.
 
   flush_done_ = xSemaphoreCreateBinary();
   const esp_lcd_panel_io_callbacks_t callbacks = {
@@ -123,6 +123,13 @@ void LcdDisplay::SetTheme(const char* theme_name) {
 void LcdDisplay::SetRotate180(bool rotate) {
   if (rotate180_ == rotate) return;
   rotate180_ = rotate;
+  if (rotate && !rotated_buffer_) {
+    rotated_buffer_ = static_cast<uint8_t*>(
+        heap_caps_malloc(width_ * height_ * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  } else if (!rotate && rotated_buffer_) {
+    heap_caps_free(rotated_buffer_);
+    rotated_buffer_ = nullptr;
+  }
   dirty_ = true;
 }
 
