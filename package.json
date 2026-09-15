@@ -16,6 +16,7 @@
     "projects:test": "node scripts/test-projects.mjs",
     "firmware:test:pairing": "node scripts/test-pairing-display.mjs",
     "firmware:test:loader": "node scripts/test-elf-loader.mjs",
+    "auth:test": "node scripts/test-auth-owner.mjs",
     "weather:test": "node scripts/test-weather-locations.mjs"
   },
   "dependencies": {

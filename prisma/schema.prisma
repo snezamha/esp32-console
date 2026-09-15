@@ -23,7 +23,7 @@ model Pairing {
 
 model Device {
   id        String   @id @default(uuid())
-  /// Google account id (JWT `sub`) that added this device.
+  /// Stable hash of the verified Google email that added this device.
   owner     String
   token     String   @unique
   name      String   @default("")
