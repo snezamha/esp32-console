@@ -314,6 +314,30 @@ std::vector<WifiNetwork> Network::ScanResults() {
   return scan_results_;
 }
 
+void Network::StartBleScan() {
+  if (ble_scanning_.exchange(true)) return;
+  if (xTaskCreatePinnedToCore(BleScanTask, "ble_scan", 6144, this, 1, nullptr, 0) != pdPASS) {
+    ble_scanning_ = false;
+  }
+}
+
+void Network::BleScanTask(void* arg) {
+  auto self = static_cast<Network*>(arg);
+  std::vector<BleDevice> devices;
+  Wireless::ScanBle(devices, 2);
+  {
+    std::lock_guard<std::mutex> lock(self->mutex_);
+    self->ble_scan_results_ = std::move(devices);
+  }
+  self->ble_scanning_ = false;
+  vTaskDelete(nullptr);
+}
+
+std::vector<BleDevice> Network::BleScanResults() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return ble_scan_results_;
+}
+
 bool Network::TimeValid() const {
   const time_t now = time(nullptr);
   return now > 1735689600;  // 2025-01-01

@@ -294,7 +294,7 @@ void HwTest::TestLed() {
 void HwTest::TestSdCard() {
   auto sd = Board::GetInstance().GetSdCard();
   if (!sd->Mount()) {
-    SetResult(kTestSdCard, TestStatus::Fail, "no card");
+    SetResult(kTestSdCard, TestStatus::Fail, sd->ProblemLabel());
     return;
   }
 

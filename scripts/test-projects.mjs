@@ -35,7 +35,7 @@ for (const project of manifest.projects) {
   assert.throws(() => inspectProject(file.subarray(0, 100)));
   const abiMarker = file.indexOf(Buffer.from(`"abi":${project.abi}`));
   assert.ok(abiMarker >= 0);
-  for (const [abi, valid] of [[2, true], [3, true], [4, false]]) {
+  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, false]]) {
     const changed = Buffer.from(file); changed[abiMarker + 6] = 48 + abi;
     if (valid) assert.equal(inspectProject(changed).abi, abi); else assert.throws(() => inspectProject(changed));
   }

@@ -150,6 +150,12 @@ pnpm projects:build
 
 This writes separate `.elf` files into `public/projects/<board>/<project>/<version>.elf` and updates `projects/manifest.json`. It uses the installed ESP32-S3 Arduino compiler; set `PROJECT_CC` to `xtensa-esp32s3-elf-gcc` on other setups. New projects implement `app_main(int argc, char **argv)` using the shared `ProjectFrame` ABI and provide a `project.json` manifest. Modules must have no unresolved imports and return after each frame. Run `pnpm projects:test` for standalone-file and transfer-state checks.
 
+### Project Builder
+
+The **Project Builder** tab provides an Arduino-style `.ino` editor without linking a second Arduino core into the display module. A sketch includes only `project_builder.h`, implements `setup(ProjectBoard *)` and `loop(ProjectBoard *)`, and ends with `PROJECT_SKETCH()`. The server compiles it into the same validated, self-describing Xtensa ELF used by the Projects tab. Drafts stay in browser storage; source and ELF files can be downloaded, and a successful ELF can be installed directly on a paired board.
+
+`project_builder.h` is the stable, single-file entry point for project code. ABI 4 exposes clipped drawing, time, buttons, battery, LED control, sandboxed SD read/write, bounded stereo microphone/speaker buffers, asynchronous Wi-Fi scan and HTTP(S) GET, and asynchronous BLE scan. See `public/project-builder-guide.md` for examples and return-value rules. Projects never receive raw GPIO, credentials, firmware globals or another project's files.
+
 ### SD card assets (base firmware v1.1.0, display ABI 3)
 
 Large projects (images, videos, data files) keep those files on a microSD card, while the small `.elf` module stays in the project flash slots. The base firmware is never modified, and projects without assets work exactly as before without a card.

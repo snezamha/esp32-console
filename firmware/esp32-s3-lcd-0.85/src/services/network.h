@@ -64,6 +64,10 @@ class Network {
   bool IsScanning() const { return scanning_; }
   uint32_t ScanAgeMs() const;
   std::vector<WifiNetwork> ScanResults();
+  // Background BLE scan shared with Project Builder; results remain until the next scan.
+  void StartBleScan();
+  bool IsBleScanning() const { return ble_scanning_; }
+  std::vector<BleDevice> BleScanResults();
 
   bool TimeValid() const;
   // Wi-Fi access point and Bluetooth name.
@@ -76,6 +80,7 @@ class Network {
 
   Network() = default;
   static void ScanTask(void* arg);
+  static void BleScanTask(void* arg);
   void ApplyWifi();
   void ApplyBle();
   void ApplyTimezone();
@@ -100,7 +105,9 @@ class Network {
   bool ble_advertising_ = false;
   std::atomic<bool> ap_active_{false};
   std::atomic<bool> scanning_{false};
+  std::atomic<bool> ble_scanning_{false};
   uint32_t scanned_at_ = 0;
   std::mutex mutex_;
   std::vector<WifiNetwork> scan_results_;
+  std::vector<BleDevice> ble_scan_results_;
 };

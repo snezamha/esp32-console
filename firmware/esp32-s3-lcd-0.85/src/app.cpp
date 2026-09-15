@@ -296,7 +296,7 @@ void App::Loop() {
   }
 
   const bool busy = HwTest::GetInstance().IsBusy();
-  LedFeedback::GetInstance().Loop(now, busy);
+  LedFeedback::GetInstance().Loop(now, busy || ProjectRuntime::Get().OwnsLed());
   Network::GetInstance().Loop(now);
   WebPortal::GetInstance().Loop(now);
   ConsoleClient::GetInstance().Loop(now);
@@ -881,7 +881,7 @@ MenuItems App::BuildSdCardMenu() {
   MenuItems items;
 
   MenuItem status =
-      Info("Status", [sd]() { return std::string(sd->mounted() ? "Ready" : "No card"); });
+      Info("Status", [sd]() { return std::string(sd->ProblemLabel()); });
   status.color = [sd](const Theme& theme) { return sd->mounted() ? theme.ok : theme.fail; };
   items.push_back(status);
   items.push_back(Info("Total", [sd]() { return sd->mounted() ? Bytes(sd->total_bytes()) : "-"; }));
@@ -1185,7 +1185,7 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
-  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=3";
+  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=4";
   body += "&project_version=" + ProjectRuntime::Get().Version();
   body += "&project_sha256=" + ProjectRuntime::Get().Sha256();
   body += "&project_safe=" + std::string(ProjectRuntime::Get().SafeMode() ? "1" : "0");

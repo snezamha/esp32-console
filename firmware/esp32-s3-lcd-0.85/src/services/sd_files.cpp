@@ -118,7 +118,7 @@ std::string SdFiles::Run() {
   auto* sd = Board::GetInstance().GetSdCard();
   if (type_ == "sd_mount") {
     sd->Unmount();
-    return sd->Mount() ? "ok|SD card mounted" : "fail|Could not mount the SD card. Use a FAT32 card and reinsert it.";
+    return std::string(sd->Mount() ? "ok|" : "fail|") + sd->ProblemMessage();
   }
   if (type_ == "sd_unmount") {
     sd->Unmount();
@@ -127,7 +127,7 @@ std::string SdFiles::Run() {
   if (type_ == "sd_format") {
     return sd->Format() ? "ok|SD card formatted" : "fail|Formatting failed. Check that a card is inserted and not locked.";
   }
-  if (!sd->Mount()) return "fail|No SD card";
+  if (!sd->Mount()) return std::string("fail|") + sd->ProblemMessage();
   auto& fs = sd->fs();
 
   if (type_ == "sd_list") {

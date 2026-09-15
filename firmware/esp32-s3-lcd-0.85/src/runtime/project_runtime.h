@@ -28,6 +28,8 @@ class ProjectRuntime {
   const std::string& Sha256() const { return sha256_; }
   bool SafeMode() const { return safe_mode_; }
   bool Busy() const { return busy_ || testing_; }
+  bool OwnsLed() const;
+  bool SdIoAvailable() const { return !sd_locked_; }
   int Progress() const { return progress_; }
   // `mounted|total bytes|free bytes` of the SD card, as last checked.
   std::string SdReport() const;

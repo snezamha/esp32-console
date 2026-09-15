@@ -11,7 +11,7 @@ export async function inspectProjectUpload(file: Pick<File, "size" | "arrayBuffe
 
 /** A project is one ELF file, with its identity embedded in the .project section. */
 export function inspectProject(bytes: Uint8Array): ProjectMetadata {
-  const fail = (): never => { throw new Error("Invalid project file. Choose a standalone ESP32 project .elf built for ABI 2 or 3."); };
+  const fail = (): never => { throw new Error("Invalid project file. Choose a standalone ESP32 project .elf built for ABI 2, 3 or 4."); };
   if (bytes.length < 52 || bytes.length > MAX_PROJECT_FILE_SIZE) return fail();
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (v.getUint32(0, false) !== 0x7f454c46 || bytes[4] !== 1 || bytes[5] !== 1 || v.getUint16(16, true) !== 3 || v.getUint16(18, true) !== 94) return fail();
@@ -40,6 +40,6 @@ export function inspectProject(bytes: Uint8Array): ProjectMetadata {
       try { metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(start, start + size))); } catch { return fail(); }
     }
   }
-  if (!metadata || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(metadata.id) || metadata.id === "none" || typeof metadata.name !== "string" || !metadata.name.length || metadata.name.length > 80 || !/^\d+\.\d+\.\d+$/.test(metadata.version) || metadata.board !== "esp32-s3-lcd-0.85" || (metadata.abi !== 2 && metadata.abi !== 3)) return fail();
+  if (!metadata || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(metadata.id) || metadata.id === "none" || typeof metadata.name !== "string" || !metadata.name.length || metadata.name.length > 80 || !/^\d+\.\d+\.\d+$/.test(metadata.version) || metadata.board !== "esp32-s3-lcd-0.85" || ![2, 3, 4].includes(metadata.abi)) return fail();
   return { ...metadata, description: typeof metadata.description === "string" ? metadata.description.slice(0, 300) : "" };
 }

@@ -13,12 +13,16 @@
 #include <cmath>
 #include <ctime>
 #include <cstring>
+#include <mutex>
+#include <memory>
 #include "../../config.h"
 #include "../board/board.h"
 #include "../storage/sd_card.h"
 #include "../common/settings.h"
 #include "../display/lcd_display.h"
 #include "../services/console_client.h"
+#include "../services/device_config.h"
+#include "../hw_test.h"
 #include "../services/network.h"
 #include "../services/sd_files.h"
 extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
@@ -217,7 +221,197 @@ int MediaDraw(void* p, int x, int y, const char* name, uint32_t frame) {
   }
   return 0;
 }
+
+// ABI 4 board services. File access is confined to one project-owned directory and every
+// per-frame operation is bounded; scans and HTTP run in background tasks.
+bool g_led_owned = false;
+RgbColor g_led_pixels[8]{};
+std::string g_user_dir;
+std::atomic<uint32_t> g_io_generation{1};
+std::atomic<int> g_http_state{0};  // 0 idle, 1 running, 2 ready, -1 failed
+std::mutex g_http_mutex;
+std::string g_http_payload;
+int g_http_code = 0;
+
+void CopyText(char* out, uint32_t capacity, const std::string& value) {
+  if (!out || !capacity) return;
+  const size_t count = std::min<size_t>(capacity - 1, value.size());
+  memcpy(out, value.data(), count); out[count] = 0;
 }
+
+void ResetProjectIo(const std::string& id = "") {
+  if (g_led_owned) {
+    Board::GetInstance().ApplyLed();
+    g_led_owned = false;
+  }
+  auto codec = Board::GetInstance().GetAudioCodec();
+  if (codec && codec->started()) codec->EnableOutput(false);
+  g_user_dir = id.empty() ? "" : "/projects-data/" + id;
+  ++g_io_generation;
+  std::lock_guard<std::mutex> lock(g_http_mutex);
+  g_http_payload.clear(); g_http_code = 0; g_http_state = 0;
+}
+
+int LedSet(int index, uint8_t red, uint8_t green, uint8_t blue) {
+  if (index < 0 || index >= 8) return -1;
+  g_led_pixels[index] = {red, green, blue}; g_led_owned = true; return 0;
+}
+int LedFill(uint8_t red, uint8_t green, uint8_t blue) {
+  for (auto& pixel : g_led_pixels) pixel = {red, green, blue};
+  g_led_owned = true; return 0;
+}
+int LedShow() {
+  if (!g_led_owned) return -1;
+  auto ring = Board::GetInstance().GetLedRing();
+  for (int i = 0; i < std::min(8, ring->count()); ++i) ring->SetPixel(i, g_led_pixels[i]);
+  ring->Show(); return 0;
+}
+void LedRelease() {
+  if (!g_led_owned) return;
+  g_led_owned = false; Board::GetInstance().ApplyLed();
+}
+
+bool StorageReady() {
+  auto* sd = Board::GetInstance().GetSdCard();
+  return !g_user_dir.empty() && ProjectRuntime::Get().SdIoAvailable() && !SdFiles::Get().Busy() && sd->mounted();
+}
+std::string StoragePath(const char* raw) {
+  if (!raw) return "";
+  const std::string name(raw, strnlen(raw, 97));
+  return ValidAssetName(name) ? g_user_dir + "/" + name : "";
+}
+void EnsureUserDir(fs::FS& fs, const std::string& path) {
+  fs.mkdir("/projects-data"); fs.mkdir(g_user_dir.c_str());
+  for (size_t slash = g_user_dir.size() + 1; (slash = path.find('/', slash)) != std::string::npos; ++slash) {
+    fs.mkdir(path.substr(0, slash).c_str());
+  }
+}
+int32_t StorageSize(const char* name) {
+  const auto path = StoragePath(name); if (!StorageReady() || path.empty()) return -1;
+  File file = Board::GetInstance().GetSdCard()->fs().open(path.c_str(), FILE_READ);
+  return file && !file.isDirectory() && file.size() <= INT32_MAX ? static_cast<int32_t>(file.size()) : -1;
+}
+int32_t StorageRead(const char* name, uint32_t offset, void* buffer, uint32_t size) {
+  const auto path = StoragePath(name); if (!StorageReady() || path.empty() || !buffer) return -1;
+  File file = Board::GetInstance().GetSdCard()->fs().open(path.c_str(), FILE_READ);
+  if (!file || file.isDirectory() || offset > file.size() || !file.seek(offset)) return -1;
+  return static_cast<int32_t>(file.read(static_cast<uint8_t*>(buffer), std::min<uint32_t>(size, 1024)));
+}
+int32_t StorageWrite(const char* name, const void* buffer, uint32_t size, int append) {
+  const auto path = StoragePath(name); if (!StorageReady() || path.empty() || (!buffer && size)) return -1;
+  auto& fs = Board::GetInstance().GetSdCard()->fs(); EnsureUserDir(fs, path);
+  File file = fs.open(path.c_str(), append ? FILE_APPEND : FILE_WRITE);
+  if (!file || file.isDirectory()) return -1;
+  const size_t written = file.write(static_cast<const uint8_t*>(buffer), std::min<uint32_t>(size, 1024));
+  file.close(); return static_cast<int32_t>(written);
+}
+int StorageRemove(const char* name) {
+  const auto path = StoragePath(name); if (!StorageReady() || path.empty()) return -1;
+  auto& fs = Board::GetInstance().GetSdCard()->fs(); File file = fs.open(path.c_str());
+  if (!file) return -1; const bool directory = file.isDirectory(); file.close();
+  return (directory ? fs.rmdir(path.c_str()) : fs.remove(path.c_str())) ? 0 : -1;
+}
+int StorageMkdir(const char* name) {
+  const auto path = StoragePath(name); if (!StorageReady() || path.empty()) return -1;
+  auto& fs = Board::GetInstance().GetSdCard()->fs(); EnsureUserDir(fs, path + "/child");
+  return fs.exists(path.c_str()) || fs.mkdir(path.c_str()) ? 0 : -1;
+}
+int StorageList(int index, char* name, uint32_t capacity, int* is_dir, uint32_t* size) {
+  if (!StorageReady() || index < 0 || !name || !capacity) return -1;
+  auto& fs = Board::GetInstance().GetSdCard()->fs(); EnsureUserDir(fs, g_user_dir + "/child");
+  File dir = fs.open(g_user_dir.c_str()); if (!dir || !dir.isDirectory()) return -1;
+  File entry; for (int i = 0; i <= index; ++i) { entry = dir.openNextFile(); if (!entry) return 0; }
+  std::string entry_name = entry.name(); const size_t slash = entry_name.rfind('/');
+  if (slash != std::string::npos) entry_name.erase(0, slash + 1);
+  CopyText(name, capacity, entry_name); if (is_dir) *is_dir = entry.isDirectory();
+  if (size) *size = entry.size() > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(entry.size());
+  entry.close(); dir.close(); return 1;
+}
+
+int AudioBegin() {
+  if (HwTest::GetInstance().IsBusy()) return 0;
+  auto codec = Board::GetInstance().GetAudioCodec(); if (!codec->started()) codec->Start();
+  return (codec->es8311_found() ? 1 : 0) | (codec->es7210_found() ? 2 : 0);
+}
+int SpeakerEnable(int enabled) {
+  if (HwTest::GetInstance().IsBusy() || !(AudioBegin() & 1)) return -1;
+  Board::GetInstance().GetAudioCodec()->EnableOutput(enabled != 0); return 0;
+}
+int SpeakerWrite(const int16_t* samples, int frames) {
+  if (!samples || frames <= 0 || HwTest::GetInstance().IsBusy() || !(AudioBegin() & 1)) return -1;
+  return Board::GetInstance().GetAudioCodec()->Write(samples, std::min(frames, 240), 0);
+}
+int MicRead(int16_t* samples, int frames) {
+  if (!samples || frames <= 0 || HwTest::GetInstance().IsBusy() || !(AudioBegin() & 2)) return -1;
+  return Board::GetInstance().GetAudioCodec()->Read(samples, std::min(frames, 240), 0);
+}
+
+int WifiScanStart() { Network::GetInstance().StartScan(); return 0; }
+int WifiScanCount() { auto& net = Network::GetInstance(); return net.IsScanning() ? -1 : static_cast<int>(net.ScanResults().size()); }
+int WifiScanResult(int index, char* ssid, uint32_t capacity, int* rssi, int* channel, int* secure) {
+  const auto items = Network::GetInstance().ScanResults(); if (index < 0 || index >= static_cast<int>(items.size())) return -1;
+  CopyText(ssid, capacity, items[index].ssid); if (rssi) *rssi = items[index].rssi;
+  if (channel) *channel = items[index].channel; if (secure) *secure = items[index].secure; return 0;
+}
+int BleScanStart() { Network::GetInstance().StartBleScan(); return 0; }
+int BleScanCount() { auto& net = Network::GetInstance(); return net.IsBleScanning() ? -1 : static_cast<int>(net.BleScanResults().size()); }
+int BleScanResult(int index, char* address, uint32_t address_capacity, char* name, uint32_t name_capacity, int* rssi) {
+  const auto items = Network::GetInstance().BleScanResults(); if (index < 0 || index >= static_cast<int>(items.size())) return -1;
+  CopyText(address, address_capacity, items[index].address); CopyText(name, name_capacity, items[index].name);
+  if (rssi) *rssi = items[index].rssi; return 0;
+}
+
+struct HttpJob { uint32_t generation; std::string url; };
+void HttpTask(void* raw) {
+  std::unique_ptr<HttpJob> job(static_cast<HttpJob*>(raw));
+  int status = -1; std::string payload;
+  HTTPClient http; NetworkClient plain; NetworkClientSecure secure;
+  const bool tls = job->url.rfind("https://", 0) == 0;
+  if (tls) secure.setCACertBundle(kCertBundleStart, kCertBundleEnd - kCertBundleStart);
+  NetworkClient& client = tls ? static_cast<NetworkClient&>(secure) : plain;
+  http.setConnectTimeout(8000); http.setTimeout(8000);
+  if (http.begin(client, job->url.c_str())) {
+    status = http.GET(); const int declared = http.getSize();
+    if (status > 0 && (declared < 0 || declared <= 8192)) {
+      auto* stream = http.getStreamPtr(); uint8_t buffer[512]; uint32_t last = millis();
+      while (http.connected() && payload.size() < 8192 && (declared < 0 || payload.size() < static_cast<size_t>(declared))) {
+        const size_t available = stream->available();
+        if (!available) { if (millis() - last > 8000) break; vTaskDelay(pdMS_TO_TICKS(5)); continue; }
+        const size_t count = stream->readBytes(buffer, std::min<size_t>({available, sizeof(buffer), 8192 - payload.size()}));
+        if (count) { payload.append(reinterpret_cast<char*>(buffer), count); last = millis(); }
+      }
+    } else if (declared > 8192) { status = -3; }
+    http.end();
+  }
+  if (job->generation == g_io_generation.load()) {
+    std::lock_guard<std::mutex> lock(g_http_mutex);
+    if (job->generation == g_io_generation.load()) {
+      g_http_payload = std::move(payload); g_http_code = status; g_http_state = status > 0 ? 2 : -1;
+    }
+  }
+  vTaskDelete(nullptr);
+}
+int HttpGet(const char* raw) {
+  if (!raw || g_http_state == 1 || Network::GetInstance().State() != Network::WifiState::Connected) return -1;
+  const std::string url(raw, strnlen(raw, 257));
+  if (url.size() > 256 || (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)) return -1;
+  auto* job = new HttpJob{g_io_generation.load(), url}; g_http_state = 1;
+  if (xTaskCreatePinnedToCore(HttpTask, "project_http", 10240, job, 1, nullptr, 0) != pdPASS) {
+    delete job; g_http_state = -1; g_http_code = -4; return -1;
+  }
+  return 0;
+}
+int32_t HttpResult(void* buffer, uint32_t capacity, int* status) {
+  const int state = g_http_state.load(); if (state == 1) return -2;
+  std::lock_guard<std::mutex> lock(g_http_mutex); if (status) *status = g_http_code;
+  if (state < 0) return -1; if (state != 2) return 0;
+  const size_t count = std::min<size_t>(capacity, g_http_payload.size());
+  if (buffer && count) memcpy(buffer, g_http_payload.data(), count);
+  return static_cast<int32_t>(count);
+}
+}
+
+bool ProjectRuntime::OwnsLed() const { return g_led_owned && loaded_; }
 
 bool ProjectRuntime::Inspect(const std::vector<uint8_t>& bytes, Metadata& metadata) {
   if (bytes.size() < sizeof(elf32_hdr_t) || bytes.size() > kMaxPackage) return false;
@@ -466,6 +660,7 @@ void ProjectRuntime::Begin() {
   Metadata metadata;
   if (file.read(bytes.data(), bytes.size()) == bytes.size() && Load(bytes, elf_, metadata) && metadata.id == saved[1]) {
     loaded_ = true; id_ = metadata.id; version_ = metadata.version; sha256_ = ComputeSha256(bytes); abi_ = metadata.abi;
+    ResetProjectIo(id_);
     const std::string digest = saved.size() > 4 && Hex64(saved[4]) ? saved[4] : "";
     UseAssets(digest);
     if (!sd_ready_) Log("Project files are missing from the SD card. Insert the card used during installation.", true);
@@ -498,6 +693,7 @@ bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const Metadata&
     s.SetString("phase", "first display frame");
     s.SetString("active", std::to_string(next_slot) + "|" + metadata.id + "|" + metadata.version + "|" + expected_sha256_ + "|" + assets_sha256_);
   }
+  ResetProjectIo(metadata.id);
   if (loaded_) esp_elf_deinit(&elf_);
   elf_ = candidate; loaded_ = true; slot_ = next_slot; id_ = metadata.id; version_ = metadata.version; sha256_ = expected_sha256_; abi_ = metadata.abi;
   UseAssets(assets_sha256_);
@@ -507,6 +703,7 @@ bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const Metadata&
 }
 
 bool ProjectRuntime::RestorePrevious(const std::string& reason) {
+  ResetProjectIo();
   if (loaded_) esp_elf_deinit(&elf_);
   loaded_ = false; id_ = "none"; version_.clear(); sha256_.clear(); testing_ = false;
   UseAssets("");
@@ -521,6 +718,7 @@ bool ProjectRuntime::RestorePrevious(const std::string& reason) {
       std::vector<uint8_t> bytes(file.size()); Metadata metadata;
       if (file.read(bytes.data(), bytes.size()) == bytes.size() && Load(bytes, elf_, metadata) && metadata.id == parts[1]) {
         loaded_ = true; slot_ = previous_slot; id_ = metadata.id; version_ = metadata.version; sha256_ = ComputeSha256(bytes); abi_ = metadata.abi;
+        ResetProjectIo(id_);
         UseAssets(parts.size() > 4 && Hex64(parts[4]) ? parts[4] : "");
       }
     }
@@ -542,6 +740,7 @@ std::string ProjectRuntime::Start(const std::string& command_id, const std::stri
   const auto id = ConsoleClient::FormValue(arg, "id");
   if (id == "none") {
     { Settings s("project", true); s.SetString("active", "0|none"); }
+    ResetProjectIo();
     if (loaded_) esp_elf_deinit(&elf_);
     loaded_ = false; id_ = "none"; version_.clear(); sha256_.clear(); safe_mode_ = false;
     UseAssets("");
@@ -795,12 +994,47 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
   }
   Drawing drawing{&c, x, y, w, h};
   const time_t now = time(nullptr); const tm local = *localtime(&now);
-  ProjectFrame frame{static_cast<uint32_t>(abi_), &drawing, w, h, local.tm_hour, local.tm_min, local.tm_sec,
-    local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_wday,
-    Network::GetInstance().TimeValid(), data_at_ ? millis()-data_at_ : 0,
-    {data_[0].c_str(), data_[1].c_str()}, {static_cast<uint32_t>(data_[0].size()), static_cast<uint32_t>(data_[1].size())}, millis(),
-    theme.text, theme.muted, theme.info, Label, Line, Ring, Circle, Rect, FillRect, TextWidth, sinf, cosf,
-    AssetSize, AssetRead, MediaInfo, MediaDraw};
+  auto& board = Board::GetInstance(); auto& network = Network::GetInstance();
+  int battery = -1; bool charging = false, discharging = false;
+  board.GetBatteryLevel(battery, charging, discharging);
+  const std::string wifi_ssid = network.WifiSsid(), wifi_ip = network.WifiIp();
+  int wifi_state = 0;
+  switch (network.State()) {
+    case Network::WifiState::Off: wifi_state = 0; break;
+    case Network::WifiState::Setup: wifi_state = 1; break;
+    case Network::WifiState::Connecting: wifi_state = 2; break;
+    case Network::WifiState::Connected: wifi_state = 3; break;
+  }
+  auto* sd = board.GetSdCard();
+  ProjectFrame frame{};
+  frame.abi = static_cast<uint32_t>(abi_); frame.canvas = &drawing; frame.width = w; frame.height = h;
+  frame.hour = local.tm_hour; frame.minute = local.tm_min; frame.second = local.tm_sec;
+  frame.year = local.tm_year + 1900; frame.month = local.tm_mon + 1; frame.day = local.tm_mday;
+  frame.weekday = local.tm_wday; frame.time_valid = network.TimeValid();
+  frame.data_age_ms = data_at_ ? millis() - data_at_ : 0;
+  frame.data[0] = data_[0].c_str(); frame.data[1] = data_[1].c_str();
+  frame.data_size[0] = data_[0].size(); frame.data_size[1] = data_[1].size(); frame.frame_ms = millis();
+  frame.text = theme.text; frame.muted = theme.muted; frame.accent = theme.info;
+  frame.label = Label; frame.line = Line; frame.ring = Ring; frame.circle = Circle; frame.rect = Rect;
+  frame.fill_rect = FillRect; frame.text_width = TextWidth; frame.sine = sinf; frame.cosine = cosf;
+  frame.asset_size = AssetSize; frame.asset_read = AssetRead; frame.media_info = MediaInfo; frame.media_draw = MediaDraw;
+  frame.buttons = (board.GetPowerButton().IsPressed() ? 1u : 0u) |
+                  (board.GetVolumeUpButton().IsPressed() ? 2u : 0u) |
+                  (board.GetVolumeDownButton().IsPressed() ? 4u : 0u);
+  frame.button_held_ms[0] = board.GetPowerButton().HeldMs(); frame.button_held_ms[1] = board.GetVolumeUpButton().HeldMs();
+  frame.button_held_ms[2] = board.GetVolumeDownButton().HeldMs();
+  frame.battery_percent = battery; frame.battery_charging = charging; frame.battery_discharging = discharging;
+  frame.volume = board.GetAudioCodec()->output_volume(); frame.audio_sample_rate = board.GetAudioCodec()->sample_rate();
+  frame.wifi_state = wifi_state; frame.wifi_rssi = network.WifiRssi(); frame.wifi_ssid = wifi_ssid.c_str(); frame.wifi_ip = wifi_ip.c_str();
+  frame.ble_enabled = DeviceConfig::Get().ble_on; frame.sd_mounted = sd->mounted();
+  frame.sd_total_bytes = sd->total_bytes(); frame.sd_free_bytes = sd->total_bytes() - sd->used_bytes();
+  frame.led_set = LedSet; frame.led_fill = LedFill; frame.led_show = LedShow; frame.led_release = LedRelease;
+  frame.storage_size = StorageSize; frame.storage_read = StorageRead; frame.storage_write = StorageWrite;
+  frame.storage_remove = StorageRemove; frame.storage_mkdir = StorageMkdir; frame.storage_list = StorageList;
+  frame.audio_begin = AudioBegin; frame.speaker_enable = SpeakerEnable; frame.speaker_write = SpeakerWrite; frame.mic_read = MicRead;
+  frame.wifi_scan_start = WifiScanStart; frame.wifi_scan_count = WifiScanCount; frame.wifi_scan_result = WifiScanResult;
+  frame.ble_scan_start = BleScanStart; frame.ble_scan_count = BleScanCount; frame.ble_scan_result = BleScanResult;
+  frame.http_get = HttpGet; frame.http_result = HttpResult;
   const auto saved = c.GetClip(); c.IntersectClip(x,y,w,h);
   char* argv[] = {reinterpret_cast<char*>(&frame)};
   const int result = esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);
