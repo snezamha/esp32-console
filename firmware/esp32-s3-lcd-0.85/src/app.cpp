@@ -153,10 +153,12 @@ void App::Start() {
   Serial.setTxTimeoutMs(0);
 
   DeviceConfig::Get().Load();
-  ProjectRuntime::Get().Begin();
 
   auto& board = Board::GetInstance();
   board.Initialize();
+  // Needs the SD card, so it must run after Initialize() creates it, and before the display's
+  // first draw so a saved project is already loaded.
+  ProjectRuntime::Get().Begin();
 
   auto display = board.GetDisplay();
   display->SetContentRenderer([this](Canvas& canvas, int x, int y, int w, int h, const Theme& theme) {
