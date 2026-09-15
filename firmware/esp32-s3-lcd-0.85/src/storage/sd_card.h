@@ -6,7 +6,10 @@
 #include <driver/sdmmc_host.h>
 #include <driver/sdmmc_types.h>
 #include <esp_heap_caps.h>
+#include <diskio_impl.h>
+#include <diskio_sdmmc.h>
 #include <esp_vfs_fat.h>
+#include <ff.h>
 #include <sdmmc_cmd.h>
 
 #include <cstdint>
@@ -52,24 +55,17 @@ class SdCard {
     mounted_ = false;
   }
 
-  // Erases the card with a fresh FAT file system. An unreadable card is formatted while mounting.
+  // Erases the card with a fresh FAT file system, then mounts it. Formats through FatFs directly:
+  // the SD_MMC/VFS path picks one-sector clusters and a PSRAM work buffer, which writes a large
+  // card's FAT one sector at a time and takes hours on a 128 GB card.
   bool Format() {
-    if (!Mount()) {
-      if (!SD_MMC.setPins(clk_, cmd_, d0_, d1_, d2_, d3_)) return false;
-      EnablePullups();
-      mounted_ = SD_MMC.begin(kMountPoint, false, true /* format_if_mount_failed */,
-                              SDMMC_FREQ_DEFAULT, kMaxOpenFiles);
-      if (!mounted_) {
-        SD_MMC.setPins(clk_, cmd_, d0_);
-        mounted_ = SD_MMC.begin(kMountPoint, true, true /* format_if_mount_failed */,
-                                kFallbackFrequencyKhz, kMaxOpenFiles);
-      }
-      if (!mounted_) return false;
+    Unmount();
+    const bool formatted = FormatWidth(false) || FormatWidth(true);
+    if (!formatted) {
+      problem_ = Diagnose();
+      return false;
     }
-    esp_vfs_fat_mount_config_t config{};
-    config.max_files = 5;
-    config.allocation_unit_size = 16 * 1024;
-    return esp_vfs_fat_sdcard_format_cfg(kMountPoint, CardAccess::Card(SD_MMC), &config) == ESP_OK;
+    return Mount();
   }
 
   bool mounted() const { return mounted_; }
@@ -110,31 +106,76 @@ class SdCard {
   static constexpr const char* kMountPoint = "/sdcard";
   static constexpr uint8_t kMaxOpenFiles = 8;
   static constexpr int kFallbackFrequencyKhz = 10000;
+  static constexpr size_t kFormatBufferBytes = 16 * 1024;
 
  private:
   // Runs after SD_MMC.begin() failed (which releases the host): probes the card directly and reads
   // its first sectors to tell a missing card from one whose file system FatFs cannot mount.
   Problem Diagnose() {
+    Problem problem = Problem::NoCard;
+    auto* sector = static_cast<uint8_t*>(heap_caps_malloc(512, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    if (sector) {
+      WithCard(true, [&](sdmmc_card_t* card) { problem = Classify(card, sector); });
+    }
+    free(sector);
+    return problem;
+  }
+
+  // Initializes the host and card without the SD_MMC driver, runs `use`, and releases the host.
+  template <typename Use>
+  bool WithCard(bool one_bit, Use use) {
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.max_freq_khz = kFallbackFrequencyKhz;
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot.width = 1;
     slot.clk = clk_;
     slot.cmd = cmd_;
     slot.d0 = d0_;
-    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-    if (sdmmc_host_init() != ESP_OK) return Problem::NoCard;
-    Problem problem = Problem::NoCard;
-    auto* card = static_cast<sdmmc_card_t*>(calloc(1, sizeof(sdmmc_card_t)));
-    auto* sector = static_cast<uint8_t*>(heap_caps_malloc(512, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    if (card && sector && sdmmc_host_init_slot(host.slot, &slot) == ESP_OK &&
-        sdmmc_card_init(&host, card) == ESP_OK) {
-      problem = Classify(card, sector);
+    if (one_bit) {
+      host.flags = SDMMC_HOST_FLAG_1BIT;
+      host.max_freq_khz = kFallbackFrequencyKhz;
+      slot.width = 1;
+    } else {
+      host.flags = SDMMC_HOST_FLAG_4BIT;
+      slot.width = 4;
+      slot.d1 = d1_;
+      slot.d2 = d2_;
+      slot.d3 = d3_;
     }
-    free(sector);
+    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    if (sdmmc_host_init() != ESP_OK) return false;
+    bool ready = false;
+    auto* card = static_cast<sdmmc_card_t*>(calloc(1, sizeof(sdmmc_card_t)));
+    if (card && sdmmc_host_init_slot(host.slot, &slot) == ESP_OK &&
+        sdmmc_card_init(&host, card) == ESP_OK) {
+      ready = true;
+      use(card);
+    }
     free(card);
     sdmmc_host_deinit();
-    return problem;
+    return ready;
+  }
+
+  bool FormatWidth(bool one_bit) {
+    bool ok = false;
+    WithCard(one_bit, [&](sdmmc_card_t* card) {
+      BYTE pdrv = 0xFF;
+      if (ff_diskio_get_drive(&pdrv) != ESP_OK || pdrv == 0xFF) return;
+      // FatFs writes the FATs through this buffer; DMA memory lets it send many sectors per write.
+      size_t size = kFormatBufferBytes;
+      auto* work = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+      if (!work) {
+        size = FF_MAX_SS;
+        work = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+      }
+      if (!work) return;
+      ff_diskio_register_sdmmc(pdrv, card);
+      const char drive[3] = {static_cast<char>('0' + pdrv), ':', '\0'};
+      // FatFs chooses the cluster size for the card (32 KB on large cards); two FATs, MBR layout.
+      const MKFS_PARM options = {FM_FAT | FM_FAT32, 2, 0, 0, 0};
+      ok = f_mkfs(drive, &options, work, size) == FR_OK;
+      ff_diskio_unregister(pdrv);
+      free(work);
+    });
+    return ok;
   }
 
   static Problem Classify(sdmmc_card_t* card, uint8_t* sector) {
@@ -167,10 +208,6 @@ class SdCard {
     gpio_pullup_en(d3_);
   }
 
-  // SDMMCFS keeps its card handle protected; formatting needs it. Adds no members.
-  struct CardAccess : fs::SDMMCFS {
-    static sdmmc_card_t* Card(fs::SDMMCFS& fs) { return static_cast<CardAccess&>(fs)._card; }
-  };
   gpio_num_t clk_, cmd_, d0_, d1_, d2_, d3_;
   bool mounted_ = false;
   Problem problem_ = Problem::None;
