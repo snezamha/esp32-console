@@ -22,7 +22,6 @@ void DeviceConfig::Load() {
   wifi_password = s.GetString("wifi_pass", "");
   wifi_ssid2 = s.GetString("wifi_ssid2", "");
   wifi_password2 = s.GetString("wifi_pass2", "");
-  ble_on = s.GetBool("ble_on", ble_on);
   clock_on = s.GetBool("clock_on", clock_on);
   timezone = s.GetString("tz", timezone.c_str());
   battery_percent = s.GetBool("bat_pct", battery_percent);
@@ -47,7 +46,6 @@ void DeviceConfig::Save() {
   s.SetString("wifi_pass", wifi_password);
   s.SetString("wifi_ssid2", wifi_ssid2);
   s.SetString("wifi_pass2", wifi_password2);
-  s.SetBool("ble_on", ble_on);
   s.SetBool("clock_on", clock_on);
   s.SetString("tz", timezone);
   s.SetBool("bat_pct", battery_percent);

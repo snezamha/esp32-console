@@ -191,6 +191,7 @@ void App::Start() {
   display->SetStatus("");
   display->UpdateStatusBar(true);
   display->Loop();  // Splash while the backlight fades in
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"ui\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
   if (ProjectRuntime::Get().SafeMode()) display->ShowNotification("Project safe mode", 6000);
 
   menu_.on_change = [this]() {
@@ -213,7 +214,9 @@ void App::Start() {
   tests.Begin();
 
   ApplySettings();
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"settings\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
   Network::GetInstance().Begin();
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"network\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
 
   auto& console = ConsoleClient::GetInstance();
   console.SetStateProvider([this]() { return ReportState(); });

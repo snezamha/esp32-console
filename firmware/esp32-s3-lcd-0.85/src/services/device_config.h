@@ -22,7 +22,9 @@ struct DeviceConfig {
   // Backup network, added from the console; tried when the main one is unreachable.
   std::string wifi_ssid2;
   std::string wifi_password2;
-  bool ble_on = true;
+  // Deliberately not persisted: BLE is brought up on request and always starts off, so this stays
+  // an honest picture of whether the radio is actually running.
+  bool ble_on = false;
   bool clock_on = true;
   std::string timezone = "Europe/Berlin";  // IANA id from time_zones.h
   bool battery_percent = true;

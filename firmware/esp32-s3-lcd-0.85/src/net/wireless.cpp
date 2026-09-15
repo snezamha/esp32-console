@@ -7,6 +7,15 @@
 #include <algorithm>
 
 namespace Wireless {
+namespace {
+// Shuts BLE down again on every exit path unless it was already running before the scan.
+struct Deinit {
+  bool keep;
+  ~Deinit() {
+    if (!keep) BLEDevice::deinit(false);
+  }
+};
+}  // namespace
 
 bool ScanWifi(std::vector<WifiNetwork>& networks) {
   networks.clear();
@@ -32,7 +41,11 @@ bool ScanWifi(std::vector<WifiNetwork>& networks) {
 
 bool ScanBle(std::vector<BleDevice>& devices, int seconds) {
   devices.clear();
-  if (!BLEDevice::getInitialized() && !BLEDevice::init("")) return false;
+  // Started here only for the scan: leaving Bluedroid up afterwards would strand ~72 KB and break
+  // the console's TLS handshake, which needs large contiguous blocks.
+  const bool was_up = BLEDevice::getInitialized();
+  if (!was_up && !BLEDevice::init("")) return false;
+  Deinit guard{was_up};
   BLEScan* scan = BLEDevice::getScan();
   scan->setActiveScan(true);
   scan->setInterval(100);

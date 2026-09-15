@@ -49,7 +49,12 @@ void Network::Begin() {
         g_disconnect_reason = info.wifi_sta_disconnected.reason;
       },
       ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-  Apply();
+  // Bluedroid costs ~72 KB of internal heap and nothing connects to the advertisement, while the
+  // console's TLS handshake needs two 16 KB contiguous buffers. Bringing BLE up at boot left the
+  // largest free block around 28 KB, so every poll failed to connect. It now starts only when
+  // asked for, via Apply().
+  ApplyTimezone();
+  ApplyWifi();
 }
 
 void Network::Apply() {
@@ -234,7 +239,9 @@ void Network::ApplyBle() {
     advertising->setScanResponse(true);
     BLEDevice::startAdvertising();
   } else {
-    BLEDevice::stopAdvertising();
+    // deinit(false) tears down Bluedroid and the controller, handing their heap back; passing true
+    // would also release the controller's static memory, which cannot be re-initialized until reset.
+    BLEDevice::deinit(false);
   }
   ble_advertising_ = want;
 }

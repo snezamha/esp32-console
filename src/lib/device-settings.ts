@@ -49,7 +49,9 @@ export const DEFAULT_SETTINGS: DeviceSettings = {
   sleep_s: 60,
   power_off_s: 0,
   rotate: false,
-  ble_on: true,
+  // Off unless asked for: BLE costs the board ~72 KB of internal heap, which it needs for the
+  // TLS handshake that talks to this console.
+  ble_on: false,
   clock_on: true,
   tz: "Europe/Berlin",
   bat_pct: true,

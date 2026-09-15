@@ -374,6 +374,8 @@ void ConsoleClient::RequestTask(void* arg) {
       code = http.POST(slot->body.c_str());
       if (code > 0) body = http.getString().c_str();
       http.end();
+    } else {
+      code = -100;  // Distinct from a POST failure, which returns its own HTTPC_ERROR_*.
     }
   }
 
@@ -429,10 +431,11 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
   if (http_code != 200 || status.empty()) {
     failures_++;
     error_ = http_code > 0 ? "HTTP " + std::to_string(http_code) : "No connection";
-    // Heap included so a run of these lines alone shows whether memory is draining over time
-    // or was already this low at the first attempt.
-    Serial.printf("{\"console\":\"error\",\"detail\":\"%s\",\"heap\":%lu}\n", error_.c_str(),
-                  (unsigned long)ESP.getFreeHeap());
+    // The raw code separates a TLS/socket failure from an HTTP status, and the largest free block
+    // matters more than the total for a TLS session, which wants tens of KB contiguous.
+    Serial.printf("{\"console\":\"error\",\"detail\":\"%s\",\"code\":%d,\"heap\":%lu,\"block\":%lu}\n",
+                  error_.c_str(), http_code, (unsigned long)ESP.getFreeHeap(),
+                  (unsigned long)ESP.getMaxAllocHeap());
     next_poll_ms_ = now + std::min<uint32_t>(kMaxBackoffMs, kRetryMs << std::min(failures_, 4));
     reported_state_.clear();  // Upload everything again once the server is back.
     SetState(State::Error);
