@@ -65,6 +65,28 @@ export async function loadSerialApi(): Promise<SerialApi | null> {
   return null;
 }
 
+/**
+ * Closes every USB serial port this origin was granted, releasing any this page (or another tab,
+ * or a stale connection after a crash/reload) left open. A "Failed to open serial port" error
+ * usually means exactly that — the OS only lets one reader hold a port at a time. This cannot
+ * release a port held by a program outside the browser (Arduino's Serial Monitor, `screen`, …);
+ * the browser has no permission to close another process's handle, so that still needs quitting
+ * the other program by hand. Returns how many ports were actually open and got closed.
+ */
+export async function releaseHeldPorts(api: SerialApi): Promise<number> {
+  const ports = await api.getPorts();
+  let released = 0;
+  for (const port of ports) {
+    try {
+      await port.close();
+      released++;
+    } catch {
+      // Already closed, or held by a process outside the browser — nothing else to try here.
+    }
+  }
+  return released;
+}
+
 export async function findKnownPort(api: SerialApi) {
   const ports = await api.getPorts();
   return (

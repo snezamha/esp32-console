@@ -24,6 +24,7 @@ import {
   loadFirmware,
   loadSerialApi,
   release,
+  releaseHeldPorts,
   type ChipInfo,
   type SerialApi,
   type Session,
@@ -278,6 +279,20 @@ export function Flasher() {
     void scan({ force: true });
   };
 
+  /** For "Failed to open" errors: closes any port left open by this browser (a stale tab, a
+   * reload mid-connection), then looks for the board again. Cannot touch a port a program
+   * outside the browser (Serial Monitor, `screen`, …) is holding — only quitting that helps. */
+  const freePort = async () => {
+    const api = apiRef.current;
+    if (!api || busyRef.current) return;
+    const released = await releaseHeldPorts(api);
+    appendLog(released ? `Released ${released} USB port(s) held by this browser.` : "No port held by this browser to release.");
+    setError(null);
+    forgetBoard();
+    setPhase("waiting");
+    void scan({ force: true });
+  };
+
   const working = phase === "preparing" || phase === "flashing";
 
   useEffect(() => {
@@ -303,6 +318,7 @@ export function Flasher() {
         onRequest={requestBoard}
         onRedetect={redetect}
         onRetry={reset}
+        onFreePort={freePort}
       />
 
       <section className="space-y-4 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
@@ -478,6 +494,7 @@ function DeviceCard({
   onRequest,
   onRedetect,
   onRetry,
+  onFreePort,
 }: {
   phase: Phase;
   info: ChipInfo | null;
@@ -486,6 +503,7 @@ function DeviceCard({
   onRequest: () => void;
   onRedetect: () => void;
   onRetry: () => void;
+  onFreePort: () => void;
 }) {
   const status = {
     loading: { dot: "bg-zinc-300", title: "Checking browser…" },
@@ -562,6 +580,24 @@ function DeviceCard({
             Allow access once — afterwards boards are detected automatically.
             {apiKind === "webusb" && " Android: native-USB boards only."}
           </p>
+          {apiKind === "native" && (
+            <Disclosure>
+              <DisclosureButton className="mx-auto block text-center text-[11px] text-zinc-400 underline underline-offset-2 data-hover:text-zinc-600 dark:data-hover:text-zinc-300">
+                Port already in use elsewhere?
+              </DisclosureButton>
+              <DisclosurePanel className="space-y-2 pt-2">
+                <p className="text-center text-[11px] text-zinc-400">
+                  Close any Serial Monitor, `screen`/`minicom`, or another tab using this board, then:
+                </p>
+                <Button
+                  onClick={onFreePort}
+                  className="h-9 w-full rounded-xl border border-zinc-200 text-xs font-medium data-active:scale-[.99] data-hover:bg-zinc-50 dark:border-zinc-700 dark:data-hover:bg-zinc-800"
+                >
+                  Free USB port held by this browser
+                </Button>
+              </DisclosurePanel>
+            </Disclosure>
+          )}
         </div>
       )}
     </section>
