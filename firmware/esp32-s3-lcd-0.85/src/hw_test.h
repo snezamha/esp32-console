@@ -69,8 +69,15 @@ class HwTest {
     int a;
     int b;
   };
+  struct StepContext {
+    HwTest* self;
+    TestId id;
+    TaskHandle_t supervisor;
+  };
 
   static void TaskMain(void* arg);
+  static void TaskStep(void* arg);
+  void RunGuarded(TestId id);
   void Execute(TestId id);
 
   void TestBattery();

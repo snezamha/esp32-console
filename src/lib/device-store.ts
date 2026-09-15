@@ -22,13 +22,15 @@ export const CODE_TTL_MS = 10 * 60 * 1000;
 /** A device counts as online when it synced within this window (a poll can be held up to 25 s). */
 export const ONLINE_WINDOW_MS = 60 * 1000;
 const COMMAND_TTL_MS = 10 * 60 * 1000;
+const COMMAND_ACK_TIMEOUT_MS = 60 * 1000;
+const OTA_ACK_TIMEOUT_MS = 10 * 60 * 1000;
 const SAMPLE_INTERVAL_MS = 60 * 1000;
 const MAX_SAMPLES = 24 * 60;
 const MAX_COMMANDS = 20;
 /** How often a held request re-checks the database while waiting for a change. */
 const POLL_INTERVAL_MS = 1500;
 /** Commands the board confirms with an explicit ack; the rest are done once delivered. */
-const FILE_COMMANDS: FileCommandType[] = ["sd_list", "sd_download", "sd_upload", "sd_delete", "sd_mkdir", "sd_rename", "sd_format"];
+const FILE_COMMANDS: FileCommandType[] = ["sd_mount", "sd_unmount", "sd_list", "sd_download", "sd_upload", "sd_delete", "sd_mkdir", "sd_rename", "sd_format"];
 const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install", "project_stop", ...FILE_COMMANDS];
 /** A delivered SD card operation without an answer after this long is treated as lost. */
 const FILE_JOB_TIMEOUT_MS = 3 * 60 * 1000;
@@ -243,9 +245,16 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     });
   }
   commands = commands.map((c) => {
-    if ((c.status !== "queued" && !(c.type === "project_install" && c.status === "sent")) || now.getTime() - c.createdAt <= COMMAND_TTL_MS) return c;
+    const queuedExpired = c.status === "queued" && now.getTime() - c.createdAt > COMMAND_TTL_MS;
+    const sentFor = now.getTime() - c.updatedAt;
+    const sentExpired = c.status === "sent" && c.type !== "project_install" && (
+      (FILE_COMMANDS.includes(c.type as FileCommandType) && sentFor > FILE_JOB_TIMEOUT_MS) ||
+      (c.type === "ota" && sentFor > OTA_ACK_TIMEOUT_MS) ||
+      (c.type !== "ota" && !FILE_COMMANDS.includes(c.type as FileCommandType) && sentFor > COMMAND_ACK_TIMEOUT_MS)
+    );
+    if (!queuedExpired && !sentExpired) return c;
     commandsChanged = true;
-    return { ...c, status: "failed" as const, result: "Device did not come online", updatedAt: now.getTime() };
+    return { ...c, status: "failed" as const, result: queuedExpired ? "Device did not come online before the request expired." : "The board did not acknowledge the command before its timeout.", updatedAt: now.getTime() };
   });
   if (commandsChanged) data.commands = json(commands);
 
@@ -588,6 +597,24 @@ export async function clearProjectHistory(owner: string, id: string): Promise<Pu
   });
   if (row?.owner === owner && deletedFileIds.length) await db.projectFile.deleteMany({ where: { id: { in: deletedFileIds }, deviceId: id } });
   return row?.owner === owner ? toPublic(row) : null;
+}
+
+/** Removes one activity entry, or the complete activity list when `target` is omitted. */
+export async function deleteCommandHistory(owner: string, id: string, target?: string): Promise<PublicDevice | null> {
+  let removed: DeviceCommand[] = [];
+  const row = await mutateDevice(id, (current) => {
+    if (current.owner !== owner) return null;
+    const commands = current.commands as DeviceCommand[];
+    removed = target ? commands.filter((command) => command.id === target) : commands;
+    return { commands: json(target ? commands.filter((command) => command.id !== target) : []) };
+  });
+  if (!row || row.owner !== owner) return null;
+
+  const retainedProjectFiles = new Set((row.commands as DeviceCommand[]).flatMap((command) => command.fileId ? [command.fileId] : []));
+  const projectFileIds = removed.flatMap((command) => command.fileId && !retainedProjectFiles.has(command.fileId) ? [command.fileId] : []);
+  if (projectFileIds.length) await db.projectFile.deleteMany({ where: { deviceId: id, id: { in: projectFileIds } } });
+  if (removed.length) await db.deviceFile.deleteMany({ where: { deviceId: id, id: { in: removed.map((command) => command.id) } } });
+  return toPublic(row);
 }
 
 // ---------------------------------------------------------------------------

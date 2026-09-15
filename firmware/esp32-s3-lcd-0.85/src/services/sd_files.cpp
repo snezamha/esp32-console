@@ -66,12 +66,14 @@ std::string SdFiles::Start(const ConsoleClient::Command& command, const std::str
   if (ProjectRuntime::Get().Busy()) return "fail|A project installation is running";
   const auto& arg = command.arg;
   type_ = command.type;
-  path_ = type_ == "sd_format" ? "/" : ConsoleClient::FormValue(arg, "path");
+  path_ = type_ == "sd_format" || type_ == "sd_mount" || type_ == "sd_unmount"
+              ? "/"
+              : ConsoleClient::FormValue(arg, "path");
   to_ = ConsoleClient::FormValue(arg, "to");
   const auto src = ConsoleClient::FormValue(arg, "src");
   sha256_ = ConsoleClient::FormValue(arg, "sha256");
   size_ = strtoul(ConsoleClient::FormValue(arg, "size").c_str(), nullptr, 10);
-  const bool known = type_ == "sd_list" || type_ == "sd_download" || type_ == "sd_upload" || type_ == "sd_delete" ||
+  const bool known = type_ == "sd_mount" || type_ == "sd_unmount" || type_ == "sd_list" || type_ == "sd_download" || type_ == "sd_upload" || type_ == "sd_delete" ||
                      type_ == "sd_mkdir" || type_ == "sd_rename" || type_ == "sd_format";
   if (!known) return "fail|Unknown SD card operation";
   if (!ValidPath(path_) || (type_ == "sd_rename" && !ValidPath(to_))) return "fail|Invalid path";
@@ -84,7 +86,7 @@ std::string SdFiles::Start(const ConsoleClient::Command& command, const std::str
   insecure_ = insecure;
   result_.clear();
   // Destructive operations must not race the running module's asset reads.
-  if (type_ == "sd_delete" || type_ == "sd_rename" || type_ == "sd_format") ProjectRuntime::Get().LockSd();
+  if (type_ == "sd_mount" || type_ == "sd_unmount" || type_ == "sd_delete" || type_ == "sd_rename" || type_ == "sd_format") ProjectRuntime::Get().LockSd();
   done_ = false;
   busy_ = true;
   if (xTaskCreatePinnedToCore(Task, "sd_files", 12288, this, 1, nullptr, 0) != pdPASS) {
@@ -98,7 +100,9 @@ std::string SdFiles::Start(const ConsoleClient::Command& command, const std::str
 std::vector<std::string> SdFiles::Loop() {
   if (!done_.exchange(false)) return {};
   busy_ = false;
-  if (type_ == "sd_delete" || type_ == "sd_rename" || type_ == "sd_format") ProjectRuntime::Get().RemountSd();
+  if (type_ == "sd_mount") ProjectRuntime::Get().UnlockSd();
+  else if (type_ == "sd_unmount") ProjectRuntime::Get().RefreshSd();
+  else if (type_ == "sd_delete" || type_ == "sd_rename" || type_ == "sd_format") ProjectRuntime::Get().RemountSd();
   else if (type_ != "sd_list" && type_ != "sd_download") ProjectRuntime::Get().RefreshSd();
   return {id_ + "|" + result_};
 }
@@ -112,6 +116,14 @@ void SdFiles::Task(void* arg) {
 
 std::string SdFiles::Run() {
   auto* sd = Board::GetInstance().GetSdCard();
+  if (type_ == "sd_mount") {
+    sd->Unmount();
+    return sd->Mount() ? "ok|SD card mounted" : "fail|Could not mount the SD card. Use a FAT32 card and reinsert it.";
+  }
+  if (type_ == "sd_unmount") {
+    sd->Unmount();
+    return "ok|SD card unmounted";
+  }
   if (type_ == "sd_format") {
     return sd->Format() ? "ok|SD card formatted" : "fail|Formatting failed. Check that a card is inserted and not locked.";
   }

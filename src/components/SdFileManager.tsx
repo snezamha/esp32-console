@@ -3,8 +3,8 @@
 import { Button } from "@headlessui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog, ErrorText, Sheet, inputClass, secondaryButton } from "@/components/ui";
-import { api, deviceName } from "@/lib/device-client";
-import type { FileJob, PublicDevice, SdEntry } from "@/lib/device-types";
+import { api, compareVersions, deviceName } from "@/lib/device-client";
+import { SD_MOUNT_FIRMWARE, type FileJob, type PublicDevice, type SdEntry } from "@/lib/device-types";
 import { errorMessage } from "@/lib/esp";
 
 const MAX_UPLOAD = 4 * 1024 * 1024;
@@ -52,8 +52,10 @@ export function SdFileManager({ device, onClose }: { device: PublicDevice; onClo
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ entry: SdEntry; name: string } | null>(null);
   const [deleting, setDeleting] = useState<SdEntry | null>(null);
+  const [mounted, setMounted] = useState(device.sdCard?.mounted ?? false);
   const upload = useRef<HTMLInputElement | null>(null);
   const loaded = useRef(false);
+  const supportsMount = compareVersions(device.firmware, SD_MOUNT_FIRMWARE) >= 0;
 
   const perform = useCallback(async (label: string, action: () => Promise<void>) => {
     setBusy(label);
@@ -67,18 +69,25 @@ export function SdFileManager({ device, onClose }: { device: PublicDevice; onClo
     }
   }, []);
 
-  const open = useCallback((folder: string) => perform("Opening folder…", async () => {
+  const loadFolder = useCallback(async (folder: string) => {
     const job = await runFileJob(device, { type: "sd_list", path: folder });
     setPath(folder);
     setEntries(job.entries ?? []);
     setNote(job.result);
-  }), [device, perform]);
+    setMounted(true);
+  }, [device]);
+
+  const open = useCallback((folder: string) => perform("Opening folder…", () => loadFolder(folder)), [loadFolder, perform]);
 
   useEffect(() => {
     if (loaded.current) return;
+    // New firmware exposes an explicit mount action. Do not trap a card that has not been checked
+    // yet behind a multi-minute automatic listing job; let the user mount it first.
+    if (supportsMount && !mounted) return;
     loaded.current = true;
-    void open("/");
-  }, [open]);
+    const timer = window.setTimeout(() => void open("/"), 0);
+    return () => window.clearTimeout(timer);
+  }, [mounted, open, supportsMount]);
 
   const validName = (name: string) => name.trim() && !/[\\/\x00-\x1f]/.test(name) && name !== "." && name !== "..";
   const card = device.sdCard;
@@ -89,9 +98,10 @@ export function SdFileManager({ device, onClose }: { device: PublicDevice; onClo
       wide
       onClose={onClose}
       title={`SD card · ${deviceName(device)}`}
-      subtitle={card?.mounted ? `${formatBytes(card.free)} free of ${formatBytes(card.total)}` : "The board has not reported a card; operations check it again."}
+      subtitle={mounted ? (card?.mounted ? `${formatBytes(card.free)} free of ${formatBytes(card.total)}` : "Card mounted; capacity will update on the next board check-in.") : "The board has not mounted a card."}
     >
       {!device.online && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">The board is offline. Operations wait for it to reconnect.</p>}
+      {supportsMount && !mounted && <p className="rounded-xl bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">Insert the microSD card, then mount it before opening files.</p>}
       <div className="flex flex-wrap items-center gap-2">
         <nav aria-label="Folder" className="flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm">
           {["/", ...path.split("/").filter(Boolean)].map((segment, i, all) => {
@@ -104,10 +114,40 @@ export function SdFileManager({ device, onClose }: { device: PublicDevice; onClo
             );
           })}
         </nav>
+        {supportsMount && !mounted && (
+          <Button
+            disabled={!!busy || !device.online}
+            onClick={() => void perform("Mounting card…", async () => {
+              const job = await runFileJob(device, { type: "sd_mount" });
+              setMounted(true);
+              setNote(job.result);
+              loaded.current = true;
+              await loadFolder("/");
+            })}
+            className={secondaryButton + " h-8 px-3 text-xs"}
+          >
+            Mount card
+          </Button>
+        )}
+        {supportsMount && mounted && (
+          <Button
+            disabled={!!busy}
+            onClick={() => void perform("Unmounting card…", async () => {
+              const job = await runFileJob(device, { type: "sd_unmount" });
+              setMounted(false);
+              setEntries(null);
+              setNote(job.result);
+              loaded.current = false;
+            })}
+            className={secondaryButton + " h-8 px-3 text-xs"}
+          >
+            Unmount
+          </Button>
+        )}
         <Button disabled={!!busy || path === "/"} onClick={() => open(parent(path))} className={secondaryButton + " h-8 px-3 text-xs"}>Up</Button>
-        <Button disabled={!!busy} onClick={() => open(path)} className={secondaryButton + " h-8 px-3 text-xs"}>Refresh</Button>
-        <Button disabled={!!busy} onClick={() => setNewFolder("")} className={secondaryButton + " h-8 px-3 text-xs"}>New folder</Button>
-        <Button disabled={!!busy} onClick={() => upload.current?.click()} className={secondaryButton + " h-8 px-3 text-xs"}>Upload</Button>
+        <Button disabled={!!busy || !mounted} onClick={() => open(path)} className={secondaryButton + " h-8 px-3 text-xs"}>Refresh</Button>
+        <Button disabled={!!busy || !mounted} onClick={() => setNewFolder("")} className={secondaryButton + " h-8 px-3 text-xs"}>New folder</Button>
+        <Button disabled={!!busy || !mounted} onClick={() => upload.current?.click()} className={secondaryButton + " h-8 px-3 text-xs"}>Upload</Button>
         <input
           ref={upload}
           type="file"

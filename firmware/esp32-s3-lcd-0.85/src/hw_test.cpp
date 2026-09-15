@@ -17,6 +17,8 @@ constexpr const char* kNames[kTestCount] = {"Battery", "Memory", "Buttons", "LED
                                             "Codec",   "Mic",    "Speaker", "Wi-Fi", "BLE"};
 constexpr const char* kKeys[kTestCount] = {"battery", "memory", "buttons", "led",  "sd",
                                            "codec",   "mic",    "speaker", "wifi", "ble"};
+// A broken peripheral or driver must never stop the remaining checks from running.
+constexpr uint32_t kTestTimeoutMs = 15000;
 
 const char* StatusKey(TestStatus status) {
   switch (status) {
@@ -131,10 +133,10 @@ void HwTest::TaskMain(void* arg) {
     self->busy_ = true;
     switch (job.type) {
       case JobType::Test:
-        self->Execute(static_cast<TestId>(job.a));
+        self->RunGuarded(static_cast<TestId>(job.a));
         break;
       case JobType::All:
-        for (int i = 0; i < kTestCount; i++) self->Execute(static_cast<TestId>(i));
+        for (int i = 0; i < kTestCount; i++) self->RunGuarded(static_cast<TestId>(i));
         Serial.println("{\"event\":\"tests_done\"}");
         break;
       case JobType::Tone: {
@@ -167,11 +169,40 @@ void HwTest::TaskMain(void* arg) {
   }
 }
 
+void HwTest::TaskStep(void* arg) {
+  const auto context = *static_cast<StepContext*>(arg);
+  context.self->Execute(context.id);
+  xTaskNotifyGive(context.supervisor);
+  vTaskDelete(nullptr);
+}
+
+void HwTest::RunGuarded(TestId id) {
+  // Discard a notification that raced the previous timeout boundary.
+  ulTaskNotifyTake(pdTRUE, 0);
+  StepContext context{this, id, xTaskGetCurrentTaskHandle()};
+  TaskHandle_t step = nullptr;
+  if (xTaskCreatePinnedToCore(TaskStep, "hw_step", 8192, &context, 2, &step, 0) != pdPASS) {
+    SetResult(id, TestStatus::Fail, "cannot start");
+    return;
+  }
+  if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kTestTimeoutMs)) == 0) {
+    vTaskDelete(step);
+    Board::GetInstance().GetAudioCodec()->EnableOutput(false);
+    Board::GetInstance().ApplyLed();
+    mic_level_ = 0;
+    SetResult(id, TestStatus::Fail, "timeout after 15s");
+    return;
+  }
+  // Every automatic check must leave a terminal result, even if a future implementation returns
+  // early by mistake. Buttons are deliberately Info/OK because they are a manual check.
+  if (Get(id).status == TestStatus::Running) SetResult(id, TestStatus::Fail, "finished without result");
+}
+
 void HwTest::Execute(TestId id) {
   if (id == kTestButtons) {
     // Interactive: the app marks buttons as they are pressed.
     if (Get(kTestButtons).status == TestStatus::Idle) {
-      SetResult(kTestButtons, TestStatus::Info, "press all");
+      SetResult(kTestButtons, TestStatus::Info, "manual: press PWR + -");
     }
     return;
   }

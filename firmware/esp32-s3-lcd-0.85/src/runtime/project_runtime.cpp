@@ -328,14 +328,19 @@ void ProjectRuntime::LockSd() {
 }
 
 bool ProjectRuntime::RemountSd() {
-  sd_locked_ = false;
   auto* sd = Board::GetInstance().GetSdCard();
   CloseAssets(); sd->Unmount();
   const bool mounted = sd->Mount();
-  if (mounted) RefreshSd(); else sd_total_ = sd_free_ = 0;
+  UnlockSd();
+  return mounted;
+}
+
+void ProjectRuntime::UnlockSd() {
+  sd_locked_ = false;
+  auto* sd = Board::GetInstance().GetSdCard();
+  if (sd->mounted()) RefreshSd(); else sd_total_ = sd_free_ = 0;
   sd_ready_ = !sd_required_ || AssetsReady(id_, version_, assets_digest_);
   sd_checked_at_ = millis();
-  return mounted;
 }
 
 void ProjectRuntime::RefreshSd() {

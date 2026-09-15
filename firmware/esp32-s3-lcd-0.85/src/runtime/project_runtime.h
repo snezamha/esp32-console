@@ -35,6 +35,8 @@ class ProjectRuntime {
   bool RemountSd();
   // Closes asset files and pauses the module's SD access while the file manager changes the card.
   void LockSd();
+  // Resumes project SD access after a file-manager mount attempt has finished.
+  void UnlockSd();
   void RefreshSd();
  private:
   static void DownloadTask(void* arg);

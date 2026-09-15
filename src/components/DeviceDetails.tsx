@@ -1,9 +1,10 @@
 "use client";
 
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ConfirmDialog, ErrorText, Sheet, ToastBanner, accentButton, inputClass, secondaryButton, useToast } from "@/components/ui";
 import {
+  api,
   availableUpdate,
   boardName,
   deviceName,
@@ -100,7 +101,7 @@ export function DeviceDetails({
             <FirmwarePanel device={device} busy={busy} onUpdate={(version) => run("ota", { type: "ota", version })} />
           </TabPanel>
           <TabPanel>
-            <ActivityPanel commands={device.commands} />
+            <ActivityPanel device={device} onError={setError} onDone={setToast} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
@@ -222,13 +223,21 @@ const STATUS_LABEL: Record<TestResult["status"], string> = {
 };
 
 function CheckPanel({ device, busy, onRun }: { device: PublicDevice; busy: string | null; onRun: (test: string) => void }) {
-  const running = Object.values(device.tests).some((t) => t.status === "running");
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = window.setInterval(tick, 10000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const stale = now !== null && !!device.testsUpdatedAt && now - device.testsUpdatedAt > 2 * 60 * 1000;
+  const running = !stale && Object.values(device.tests).some((t) => t.status === "running");
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-zinc-500">
           {device.testsUpdatedAt ? `Updated ${timeAgo(device.testsUpdatedAt)}` : "No results yet"}
-          {" · "}Buttons need someone at the device.
+          {" · "}Checks time out instead of blocking; buttons are manual.
         </p>
         <Button
           onClick={() => onRun("all")}
@@ -240,7 +249,8 @@ function CheckPanel({ device, busy, onRun }: { device: PublicDevice; busy: strin
       </div>
       <ul className="divide-y divide-zinc-200 rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
         {TESTS.map((test) => {
-          const result = device.tests[test.key] ?? { status: "idle", detail: "" };
+          const stored = device.tests[test.key] ?? { status: "idle", detail: "" };
+          const result: TestResult = stale && stored.status === "running" ? { status: "fail", detail: "No final result · timed out" } : stored;
           return (
             <li key={test.key} className="flex items-center gap-3 px-3 py-2.5 text-sm">
               <span className={`size-2 shrink-0 rounded-full ${STATUS_STYLE[result.status]}`} aria-hidden />
@@ -398,6 +408,8 @@ const COMMAND_LABELS: Record<DeviceCommand["type"], string> = {
   ota: "Firmware update",
   wifi_add: "Add backup network",
   wifi_forget: "Forget backup network",
+  sd_mount: "SD card: mount",
+  sd_unmount: "SD card: unmount",
   sd_list: "SD card: open folder",
   sd_download: "SD card: download",
   sd_upload: "SD card: upload",
@@ -407,28 +419,62 @@ const COMMAND_LABELS: Record<DeviceCommand["type"], string> = {
   sd_format: "SD card: format",
 };
 
-function ActivityPanel({ commands }: { commands: DeviceCommand[] }) {
+function ActivityPanel({ device, onError, onDone }: { device: PublicDevice; onError: (message: string | null) => void; onDone: (message: string) => void }) {
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const commands = device.commands.filter((command) => !hidden.has(command.id));
+
+  const remove = async (command?: string) => {
+    setDeleting(command ?? "all");
+    onError(null);
+    try {
+      await api(`/api/devices/${device.id}/commands${command ? `?command=${encodeURIComponent(command)}` : ""}`, "DELETE");
+      setHidden((current) => new Set([...current, ...(command ? [command] : device.commands.map((entry) => entry.id))]));
+      onDone(command ? "Activity entry removed." : "Activity history cleared.");
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   if (!commands.length) return <p className="text-sm text-zinc-500">No commands sent yet.</p>;
   return (
-    <ul className="divide-y divide-zinc-200 rounded-xl border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
-      {[...commands].reverse().map((command) => (
-        <li key={command.id} className="flex items-center gap-3 px-3 py-2.5">
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">
-              {COMMAND_LABELS[command.type]}
-              {command.type === "notify" && <span className="font-normal text-zinc-500"> “{command.arg}”</span>}
-              {command.type === "test" && <span className="font-normal text-zinc-500"> · {command.arg}</span>}
-              {command.type.startsWith("sd_") && command.type !== "sd_format" && <span className="font-normal text-zinc-500"> · {new URLSearchParams(command.arg).get("path")}</span>}
-            </p>
-            <p className="truncate text-xs text-zinc-500">
-              {timeAgo(command.createdAt)}
-              {command.result && ` · ${command.result}`}
-            </p>
-          </div>
-          <CommandBadge status={command.status} />
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-2">
+      <div className="flex justify-end">
+        <Button disabled={deleting !== null} onClick={() => setConfirmAll(true)} className="rounded-lg px-2 py-1 text-xs font-medium text-red-600 data-disabled:opacity-40 data-hover:bg-red-50 dark:data-hover:bg-red-950">Clear all</Button>
+      </div>
+      <ul className="divide-y divide-zinc-200 rounded-xl border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
+        {[...commands].reverse().map((command) => (
+          <li key={command.id} className="flex items-center gap-2 px-3 py-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                {COMMAND_LABELS[command.type]}
+                {command.type === "notify" && <span className="font-normal text-zinc-500"> “{command.arg}”</span>}
+                {command.type === "test" && <span className="font-normal text-zinc-500"> · {command.arg}</span>}
+                {command.type.startsWith("sd_") && !["sd_mount", "sd_unmount", "sd_format"].includes(command.type) && <span className="font-normal text-zinc-500"> · {new URLSearchParams(command.arg).get("path")}</span>}
+              </p>
+              <p className="truncate text-xs text-zinc-500">
+                {timeAgo(command.createdAt)}
+                {command.result && ` · ${command.result}`}
+              </p>
+            </div>
+            <CommandBadge status={command.status} />
+            <Button aria-label={`Remove ${COMMAND_LABELS[command.type]} activity`} title="Remove activity" disabled={deleting !== null} onClick={() => void remove(command.id)} className="size-7 shrink-0 rounded-lg text-zinc-400 data-disabled:opacity-40 data-hover:bg-red-50 data-hover:text-red-600 dark:data-hover:bg-red-950">×</Button>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={confirmAll}
+        onClose={() => setConfirmAll(false)}
+        title="Clear all activity?"
+        description="All command entries and their stored transfer logs will be removed. This does not undo actions the board already completed."
+        confirmLabel="Clear all"
+        busy={deleting !== null}
+        onConfirm={() => { setConfirmAll(false); void remove(); }}
+      />
+    </div>
   );
 }
 

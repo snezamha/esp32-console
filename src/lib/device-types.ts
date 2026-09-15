@@ -18,9 +18,11 @@ export type CommandType = "restart" | "poweroff" | "identify" | "notify" | "test
  * SD card file manager (firmware 1.1.1+). Arguments are form-encoded: `path`, plus `to` (rename),
  * `src` (transfer URL on the console) and `size`/`sha256` (upload). See src/services/sd_files.h.
  */
-export type FileCommandType = "sd_list" | "sd_download" | "sd_upload" | "sd_delete" | "sd_mkdir" | "sd_rename" | "sd_format";
+export type FileCommandType = "sd_mount" | "sd_unmount" | "sd_list" | "sd_download" | "sd_upload" | "sd_delete" | "sd_mkdir" | "sd_rename" | "sd_format";
 /** First firmware with the SD card file manager and the LED ring designer. */
 export const SD_FILES_FIRMWARE = "1.1.1";
+/** First firmware with explicit SD mount and unmount commands. */
+export const SD_MOUNT_FIRMWARE = "1.1.7";
 export type SdEntry = { name: string; folder: boolean; size: number; modified: number };
 export type FileJob = { id: string; type: FileCommandType; status: DeviceCommand["status"]; result: string; entries?: SdEntry[] };
 

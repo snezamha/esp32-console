@@ -1,9 +1,9 @@
 import { getUser, unauthorized } from "@/lib/auth";
 import { compareVersions } from "@/lib/device-client";
 import { listDevices, MAX_DEVICE_FILE_BYTES, queueFileCommand } from "@/lib/device-store";
-import { SD_FILES_FIRMWARE, type FileCommandType } from "@/lib/device-types";
+import { SD_FILES_FIRMWARE, SD_MOUNT_FIRMWARE, type FileCommandType } from "@/lib/device-types";
 
-const JSON_ACTIONS: FileCommandType[] = ["sd_list", "sd_download", "sd_delete", "sd_mkdir", "sd_rename", "sd_format"];
+const JSON_ACTIONS: FileCommandType[] = ["sd_mount", "sd_unmount", "sd_list", "sd_download", "sd_delete", "sd_mkdir", "sd_rename", "sd_format"];
 
 /** Absolute card path without empty, "." or ".." segments (the board checks again). */
 function cardPath(value: unknown) {
@@ -43,7 +43,10 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
     const body = await request.json().catch(() => null);
     type = body?.type;
     if (!JSON_ACTIONS.includes(type)) return bad("Unknown SD card operation.");
-    const path = type === "sd_format" ? "/" : cardPath(body.path);
+    if ((type === "sd_mount" || type === "sd_unmount") && compareVersions(device.firmware, SD_MOUNT_FIRMWARE) < 0) {
+      return bad(`Update the base firmware to v${SD_MOUNT_FIRMWARE} to mount the card from the console.`);
+    }
+    const path = type === "sd_format" || type === "sd_mount" || type === "sd_unmount" ? "/" : cardPath(body.path);
     if (!path) return bad("Invalid path.");
     if ((type === "sd_delete" || type === "sd_rename" || type === "sd_mkdir") && path === "/") return bad("The card root cannot be changed.");
     params.path = path;

@@ -1,11 +1,22 @@
 import { getUser, unauthorized } from "@/lib/auth";
 import { BOARDS } from "@/lib/boards";
-import { listDevices, queueCommand, stopProject, retryProjectFile } from "@/lib/device-store";
+import { deleteCommandHistory, listDevices, queueCommand, stopProject, retryProjectFile } from "@/lib/device-store";
 import { projectPackage } from "@/lib/projects";
 import { isOtaActive } from "@/lib/device-client";
 import type { CommandType } from "@/lib/device-types";
 
 const TEST_KEYS = ["all", "battery", "memory", "buttons", "led", "sd", "codec", "mic", "speaker", "wifi", "ble"];
+
+/** Deletes one activity entry (`?command=<id>`) or the full activity history. */
+export async function DELETE(request: Request, ctx: RouteContext<"/api/devices/[id]/commands">) {
+  const user = await getUser();
+  if (!user) return unauthorized();
+  const { id } = await ctx.params;
+  const target = new URL(request.url).searchParams.get("command") ?? undefined;
+  if (target && !/^[0-9a-f]{8}$/.test(target)) return Response.json({ error: "Invalid activity entry." }, { status: 400 });
+  const device = await deleteCommandHistory(user.id, id, target);
+  return device ? Response.json({ device }) : Response.json({ error: "Device not found." }, { status: 404 });
+}
 
 /**
  * Sends a command to the device.

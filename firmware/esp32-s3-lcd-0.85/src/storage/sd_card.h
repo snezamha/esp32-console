@@ -18,10 +18,18 @@ class SdCard {
   bool Mount() {
     if (mounted_) return true;
     if (!SD_MMC.setPins(clk_, cmd_, d0_, d1_, d2_, d3_)) return false;
+    EnablePullups();
     // Arduino defaults to the SDMMC high-speed clock (40 MHz), while Waveshare's ESP-IDF BSP
     // initializes this board at the standard 20 MHz rate. Some cards fail negotiation at 40 MHz.
     mounted_ = SD_MMC.begin(kMountPoint, false /* 4-bit */, false /* never format implicitly */,
                             SDMMC_FREQ_DEFAULT, kMaxOpenFiles);
+    // A marginal D1/D2/D3 line should not make the card unusable. The file manager works in
+    // 1-bit mode too, so retry at a conservative clock before reporting that no card is present.
+    if (!mounted_) {
+      SD_MMC.setPins(clk_, cmd_, d0_);
+      mounted_ = SD_MMC.begin(kMountPoint, true /* 1-bit */, false, kFallbackFrequencyKhz,
+                              kMaxOpenFiles);
+    }
     if (mounted_ && SD_MMC.cardType() == CARD_NONE) {
       SD_MMC.end();
       mounted_ = false;
@@ -39,8 +47,14 @@ class SdCard {
   bool Format() {
     if (!Mount()) {
       if (!SD_MMC.setPins(clk_, cmd_, d0_, d1_, d2_, d3_)) return false;
+      EnablePullups();
       mounted_ = SD_MMC.begin(kMountPoint, false, true /* format_if_mount_failed */,
                               SDMMC_FREQ_DEFAULT, kMaxOpenFiles);
+      if (!mounted_) {
+        SD_MMC.setPins(clk_, cmd_, d0_);
+        mounted_ = SD_MMC.begin(kMountPoint, true, true /* format_if_mount_failed */,
+                                kFallbackFrequencyKhz, kMaxOpenFiles);
+      }
       if (!mounted_) return false;
     }
     esp_vfs_fat_mount_config_t config{};
@@ -56,8 +70,17 @@ class SdCard {
 
   static constexpr const char* kMountPoint = "/sdcard";
   static constexpr uint8_t kMaxOpenFiles = 8;
+  static constexpr int kFallbackFrequencyKhz = 10000;
 
  private:
+  void EnablePullups() const {
+    gpio_pullup_en(cmd_);
+    gpio_pullup_en(d0_);
+    gpio_pullup_en(d1_);
+    gpio_pullup_en(d2_);
+    gpio_pullup_en(d3_);
+  }
+
   // SDMMCFS keeps its card handle protected; formatting needs it. Adds no members.
   struct CardAccess : fs::SDMMCFS {
     static sdmmc_card_t* Card(fs::SDMMCFS& fs) { return static_cast<CardAccess&>(fs)._card; }

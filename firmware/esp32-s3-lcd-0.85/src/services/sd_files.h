@@ -10,6 +10,8 @@
 
 // SD card file manager driven from the web console. The board starts every transfer itself
 // (it cannot be reached directly), so file contents travel through the console server:
+//   sd_mount                                   re-detect and mount the card
+//   sd_unmount                                 close files and release the SDMMC bus
 //   sd_list      path                      POST `d|f <tab> size <tab> mtime <tab> name` lines to src
 //   sd_download  path, src                 POST the file's bytes to src
 //   sd_upload    path, src, size, sha256   GET src into path (verified, then renamed into place)
