@@ -9,7 +9,7 @@ import { Select } from "@/components/Select";
 import { ConfirmDialog, ErrorText, Skeleton, ToastBanner, accentButton, cardClass, inputClass, useToast } from "@/components/ui";
 import { api, deviceName, isOtaActive } from "@/lib/device-client";
 import { TIME_ZONES } from "@/lib/device-settings";
-import { inspectProject } from "@/lib/project-file";
+import { inspectProjectUpload } from "@/lib/project-file";
 import { projectPending } from "@/lib/project-transfers";
 import type { DeviceCommand, PublicDevice } from "@/lib/device-types";
 import { DISPLAY_PROJECTS } from "@/lib/projects";
@@ -225,7 +225,7 @@ function ProjectPicker({ device, onUpdated }: { device: PublicDevice; onUpdated:
               setFile(null); setFileName(""); setError(null);
               if (!selected) return;
               try {
-                const meta = inspectProject(new Uint8Array(await selected.arrayBuffer()));
+                const meta = await inspectProjectUpload(selected);
                 setFile(selected); setFileName(`${meta.name} · v${meta.version} · ${selected.size.toLocaleString()} bytes`);
               } catch (err) { setError(errorMessage(err)); }
             }}
@@ -373,12 +373,37 @@ function UploadPanel({
   onFile: (file: File | undefined) => void;
   onUpload: () => void;
 }) {
+  const [dragging, setDragging] = useState(false);
+  const choose = (selected?: File) => {
+    setDragging(false);
+    if (!busy) onFile(selected);
+  };
   return (
     <section className={cardClass + " space-y-3 p-4"}>
       <h3 className="text-sm font-semibold">Upload a project file</h3>
-      <p className="text-xs text-zinc-500">Choose one .elf file containing its project identity. No companion files are needed. Maximum 128 KB.</p>
-      <input aria-label="Project file" type="file" accept=".elf" disabled={busy} className="w-full text-xs" onChange={(e) => onFile(e.target.files?.[0])} />
-      {fileName && <p className="text-xs text-zinc-500">{fileName}</p>}
+      <p id="project-file-help" className="text-xs text-zinc-500">Choose one self-contained project ELF. No companion files are needed. Maximum 128 KB. The file contents are validated after selection.</p>
+      <label
+        className={`${dragging ? "border-blue-500 bg-blue-50 dark:bg-blue-950" : "border-zinc-300 dark:border-zinc-700"} ${busy ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-blue-400"} flex min-h-28 items-center justify-center rounded-xl border-2 border-dashed p-4 text-center transition`}
+        onDragEnter={(event) => { event.preventDefault(); if (!busy) setDragging(true); }}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+        onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files[0]); }}
+      >
+        <input
+          aria-label="Choose project file"
+          aria-describedby="project-file-help"
+          type="file"
+          disabled={busy}
+          className="sr-only"
+          onChange={(event) => {
+            const selected = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            choose(selected);
+          }}
+        />
+        <span className="text-xs"><span className="block font-medium text-blue-600">Browse for a project file</span><span className="mt-1 block text-zinc-500">or drop it here · .elf · up to 128 KB</span></span>
+      </label>
+      {fileName && <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 p-3 text-xs dark:bg-emerald-950"><p className="min-w-0 break-words text-emerald-700 dark:text-emerald-300">Ready: {fileName}</p><Button disabled={busy} onClick={() => choose()} className="shrink-0 text-zinc-500 underline">Remove</Button></div>}
       {upload !== null && (
         <div role="status" className="text-xs">
           Uploading to console: {upload}%

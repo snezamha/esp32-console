@@ -5,11 +5,16 @@ const moduleFrom = async (path) => {
   const source = ts.transpileModule(readFileSync(path, "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 };
-const { inspectProject } = await moduleFrom("src/lib/project-file.ts");
+const { inspectProject, inspectProjectUpload } = await moduleFrom("src/lib/project-file.ts");
+let uploadReads = 0;
+await assert.rejects(() => inspectProjectUpload({ size: 128 * 1024 + 1, arrayBuffer: async () => { uploadReads++; return new ArrayBuffer(0); } }), /128 KB/);
+assert.equal(uploadReads, 0, "Oversized browser files must be rejected before reading");
+await assert.rejects(() => inspectProjectUpload({ size: 0, arrayBuffer: async () => new ArrayBuffer(0) }), /between 1 byte/);
 const manifest = JSON.parse(readFileSync("projects/manifest.json", "utf8"));
 for (const project of manifest.projects) {
   const file = readFileSync(`public${project.path}`);
   const identity = inspectProject(file);
+  assert.equal((await inspectProjectUpload({ size: file.length, arrayBuffer: async () => Uint8Array.from(file).buffer })).id, project.id);
   assert.equal(identity.id, project.id);
   assert.equal(identity.version, project.version);
   assert.throws(() => inspectProject(file.subarray(0, 100)));

@@ -1,8 +1,18 @@
 export type ProjectMetadata = { id: string; name: string; version: string; description: string; board: string; abi: number };
+export const MAX_PROJECT_FILE_SIZE = 128 * 1024;
+
+/** Reject oversized browser files before reading them into memory. */
+export async function inspectProjectUpload(file: Pick<File, "size" | "arrayBuffer">): Promise<ProjectMetadata> {
+  if (!file.size || file.size > MAX_PROJECT_FILE_SIZE) {
+    throw new Error("Project file must be between 1 byte and 128 KB.");
+  }
+  return inspectProject(new Uint8Array(await file.arrayBuffer()));
+}
+
 /** A project is one ELF file, with its identity embedded in the .project section. */
 export function inspectProject(bytes: Uint8Array): ProjectMetadata {
   const fail = (): never => { throw new Error("Invalid project file. Choose a standalone ESP32 project .elf built for ABI 1."); };
-  if (bytes.length < 52 || bytes.length > 128 * 1024) return fail();
+  if (bytes.length < 52 || bytes.length > MAX_PROJECT_FILE_SIZE) return fail();
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (v.getUint32(0, false) !== 0x7f454c46 || bytes[4] !== 1 || bytes[5] !== 1 || v.getUint16(16, true) !== 3 || v.getUint16(18, true) !== 94) return fail();
   const offset = v.getUint32(32, true), count = v.getUint16(48, true), names = v.getUint16(50, true);
