@@ -3,6 +3,7 @@
 #include <FS.h>
 #include <SD_MMC.h>
 #include <driver/gpio.h>
+#include <driver/sdmmc_types.h>
 #include <esp_vfs_fat.h>
 
 #include <cstdint>
@@ -17,7 +18,14 @@ class SdCard {
   bool Mount() {
     if (mounted_) return true;
     if (!SD_MMC.setPins(clk_, cmd_, d0_, d1_, d2_, d3_)) return false;
-    mounted_ = SD_MMC.begin(kMountPoint, false /* 4-bit */);
+    // Arduino defaults to the SDMMC high-speed clock (40 MHz), while Waveshare's ESP-IDF BSP
+    // initializes this board at the standard 20 MHz rate. Some cards fail negotiation at 40 MHz.
+    mounted_ = SD_MMC.begin(kMountPoint, false /* 4-bit */, false /* never format implicitly */,
+                            SDMMC_FREQ_DEFAULT, kMaxOpenFiles);
+    if (mounted_ && SD_MMC.cardType() == CARD_NONE) {
+      SD_MMC.end();
+      mounted_ = false;
+    }
     return mounted_;
   }
 
@@ -31,7 +39,8 @@ class SdCard {
   bool Format() {
     if (!Mount()) {
       if (!SD_MMC.setPins(clk_, cmd_, d0_, d1_, d2_, d3_)) return false;
-      mounted_ = SD_MMC.begin(kMountPoint, false, true /* format_if_mount_failed */);
+      mounted_ = SD_MMC.begin(kMountPoint, false, true /* format_if_mount_failed */,
+                              SDMMC_FREQ_DEFAULT, kMaxOpenFiles);
       if (!mounted_) return false;
     }
     esp_vfs_fat_mount_config_t config{};
@@ -46,6 +55,7 @@ class SdCard {
   fs::FS& fs() { return SD_MMC; }
 
   static constexpr const char* kMountPoint = "/sdcard";
+  static constexpr uint8_t kMaxOpenFiles = 8;
 
  private:
   // SDMMCFS keeps its card handle protected; formatting needs it. Adds no members.

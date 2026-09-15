@@ -26,9 +26,21 @@ const PRESETS: { label: string; mode: LedMode; pixels: (i: number) => LedPixel }
   { label: "Comet", mode: "chase", pixels: () => ({ color: "ff5a00", level: 100, blink: false }) },
 ];
 
-const SIZE = 240;
-const CENTER = SIZE / 2;
-const RADIUS = 92;
+const BOARD_WIDTH = 240;
+const BOARD_HEIGHT = 210;
+
+// Physical positions on the 46 x 40 mm board, viewed from the display side with USB at the bottom.
+// The data chain starts at the upper-left LED and follows the perimeter clockwise.
+const LED_POSITIONS = [
+  { x: 55, y: 38 },
+  { x: 98, y: 38 },
+  { x: 142, y: 38 },
+  { x: 185, y: 38 },
+  { x: 185, y: 172 },
+  { x: 142, y: 172 },
+  { x: 98, y: 172 },
+  { x: 55, y: 172 },
+] as const;
 
 /** Ring simulator: pick LEDs, give each a color, level and blink, and choose a ring effect. */
 export function LedRingDesigner({ value, onChange }: { value: LedSettings; onChange: (next: Partial<LedSettings>) => void }) {
@@ -56,15 +68,26 @@ export function LedRingDesigner({ value, onChange }: { value: LedSettings; onCha
   return (
     <div className="space-y-4">
       <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-        <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="w-56 max-w-full shrink-0" role="group" aria-label="LED ring simulator">
-          <circle cx={CENTER} cy={CENTER} r={112} className="fill-zinc-800 dark:fill-zinc-950" />
-          <circle cx={CENTER} cy={CENTER} r={104} className="fill-zinc-900 stroke-zinc-700" strokeWidth={1} />
-          <rect x={CENTER - 42} y={CENTER - 42} width={84} height={84} rx={8} className="fill-black stroke-zinc-700" />
-          <text x={CENTER} y={CENTER + 4} textAnchor="middle" className="fill-zinc-500 text-[10px]">Screen</text>
+        <svg viewBox={`0 0 ${BOARD_WIDTH} ${BOARD_HEIGHT}`} className="w-60 max-w-full shrink-0" role="group" aria-label="LED layout on the ESP32-S3-LCD-0.85 board">
+          <defs>
+            <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#0b2940" />
+              <stop offset="1" stopColor="#061a2b" />
+            </linearGradient>
+          </defs>
+          <rect x={10} y={8} width={220} height={194} rx={12} fill="url(#pcb)" className="stroke-slate-600" strokeWidth={1.5} />
+          {[{ x: 23, y: 21 }, { x: 217, y: 21 }, { x: 23, y: 189 }, { x: 217, y: 189 }].map((hole) => (
+            <g key={`${hole.x}-${hole.y}`}>
+              <circle cx={hole.x} cy={hole.y} r={8} className="fill-slate-300 stroke-slate-500" strokeWidth={1.5} />
+              <circle cx={hole.x} cy={hole.y} r={4} className="fill-slate-700" />
+            </g>
+          ))}
+          <rect x={72} y={54} width={96} height={102} rx={7} className="fill-slate-800 stroke-slate-500" strokeWidth={1} />
+          <rect x={81} y={64} width={78} height={82} rx={2} className="fill-black stroke-zinc-600" />
+          <text x={120} y={108} textAnchor="middle" className="fill-zinc-500 text-[9px]">128 × 128</text>
+          <path d="M108 202h24v5h-24z" className="fill-slate-400 stroke-slate-600" />
           {pixels.map((_, i) => {
-            const angle = (i / LED_COUNT) * 2 * Math.PI - Math.PI / 2;
-            const x = CENTER + RADIUS * Math.cos(angle);
-            const y = CENTER + RADIUS * Math.sin(angle);
+            const { x, y } = LED_POSITIONS[i];
             const lit = value.led_on ? frame[i] : { color: "000000", intensity: 0 };
             // Scaled for the screen: the real LEDs are far brighter than a monitor at low levels.
             const shown = lit.intensity > 0 ? 0.25 + 0.75 * Math.sqrt(lit.intensity) : 0;
@@ -72,9 +95,10 @@ export function LedRingDesigner({ value, onChange }: { value: LedSettings; onCha
             return (
               <g key={i} onClick={() => toggle(i)} className="cursor-pointer" role="checkbox" aria-checked={isSelected} aria-label={`LED ${i + 1}`} tabIndex={0} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(i); } }}>
                 {shown > 0 && <circle cx={x} cy={y} r={20} fill={`#${lit.color}`} opacity={shown * 0.35} />}
-                <circle cx={x} cy={y} r={11} fill={`#${lit.color}`} fillOpacity={shown} className="stroke-zinc-600" strokeWidth={1} />
-                {isSelected && <circle cx={x} cy={y} r={15} fill="none" className="stroke-blue-400" strokeWidth={2.5} />}
-                <text x={CENTER + (RADIUS - 26) * Math.cos(angle)} y={CENTER + (RADIUS - 26) * Math.sin(angle) + 3} textAnchor="middle" className="fill-zinc-500 text-[9px]">{i + 1}</text>
+                <rect x={x - 8} y={y - 8} width={16} height={16} rx={2} className="fill-zinc-200 stroke-zinc-500" strokeWidth={1} />
+                <rect x={x - 5} y={y - 5} width={10} height={10} rx={1.5} fill={`#${lit.color}`} fillOpacity={shown} className="stroke-zinc-600" strokeWidth={0.75} />
+                {isSelected && <rect x={x - 12} y={y - 12} width={24} height={24} rx={6} fill="none" className="stroke-blue-400" strokeWidth={2.5} />}
+                <text x={x} y={i < 4 ? y + 22 : y - 17} textAnchor="middle" className="fill-slate-400 text-[8px]">{i + 1}</text>
               </g>
             );
           })}
