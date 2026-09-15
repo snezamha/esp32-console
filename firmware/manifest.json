@@ -20,14 +20,14 @@
       ],
       "versions": [
         {
-          "version": "1.1.2",
-          "builtAt": "2026-09-15T12:57:27.907Z",
+          "version": "1.1.3",
+          "builtAt": "2026-09-15T13:16:32.176Z",
           "size": 2043904,
-          "sha256": "f12567a0050a5b737ac6b144ec69410c59a8ae0a351fee9d7a4d692c314355a1",
+          "sha256": "fe93d5ce08ea761a33673f532dfd20628535571be8f5467309fd460afcc5fe32",
           "app": {
-            "size": 1975568,
-            "sha256": "f40921a25a281265c09e168e599643d8dd60f4300ca86d094a29a74ae8fb6c1f",
-            "md5": "0402ac8538d2da733cb2593ab99278e9"
+            "size": 1975504,
+            "sha256": "caeb3b979e63c6e1ea66bd92c1f41443d00e93b4490540faa977ac5d68bbd654",
+            "md5": "e7498c98132073e09d392d9663329db1"
           }
         }
       ]

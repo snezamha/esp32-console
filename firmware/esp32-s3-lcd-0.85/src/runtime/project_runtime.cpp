@@ -356,12 +356,18 @@ bool ProjectRuntime::AssetsReady(const std::string& id, const std::string& versi
   return ok;
 }
 
-// Points the asset API at the loaded module's folder. An empty digest means the module has no SD files.
+// Points the asset API at the loaded module's folder. An empty digest means the module has no SD
+// files, so the card is never touched: SD_MMC.begin() reserves DMA-capable internal RAM for as
+// long as the board runs, and doing that on every boot starved the console's TLS handshake.
 void ProjectRuntime::UseAssets(const std::string& digest) {
   CloseAssets();
   assets_digest_ = digest;
   sd_required_ = loaded_ && !digest.empty();
   g_asset_dir = sd_required_ ? AssetDir(id_, version_) : "";
+  if (sd_required_) {
+    auto* sd = Board::GetInstance().GetSdCard();
+    if (sd->Mount()) RefreshSd();
+  }
   sd_ready_ = !sd_required_ || AssetsReady(id_, version_, digest);
   sd_checked_at_ = millis();
 }
@@ -445,7 +451,6 @@ void ProjectRuntime::Begin() {
       Log("Project storage was repaired; default display restored.", true);
     }
   }
-  if (Board::GetInstance().GetSdCard()->Mount()) RefreshSd();
   if (!mounted_) return;
   const auto saved = Parts(active);
   slot_ = !saved.empty() && saved[0] == "1" ? 1 : 0;
