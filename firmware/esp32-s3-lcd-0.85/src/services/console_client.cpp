@@ -429,7 +429,10 @@ void ConsoleClient::HandlePoll(int http_code, const std::string& body) {
   if (http_code != 200 || status.empty()) {
     failures_++;
     error_ = http_code > 0 ? "HTTP " + std::to_string(http_code) : "No connection";
-    Serial.printf("{\"console\":\"error\",\"detail\":\"%s\"}\n", error_.c_str());
+    // Heap included so a run of these lines alone shows whether memory is draining over time
+    // or was already this low at the first attempt.
+    Serial.printf("{\"console\":\"error\",\"detail\":\"%s\",\"heap\":%lu}\n", error_.c_str(),
+                  (unsigned long)ESP.getFreeHeap());
     next_poll_ms_ = now + std::min<uint32_t>(kMaxBackoffMs, kRetryMs << std::min(failures_, 4));
     reported_state_.clear();  // Upload everything again once the server is back.
     SetState(State::Error);

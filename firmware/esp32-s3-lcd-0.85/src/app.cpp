@@ -153,12 +153,15 @@ void App::Start() {
   Serial.setTxTimeoutMs(0);
 
   DeviceConfig::Get().Load();
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"start\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
 
   auto& board = Board::GetInstance();
   board.Initialize();
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"board\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
   // Needs the SD card, so it must run after Initialize() creates it, and before the display's
   // first draw so a saved project is already loaded.
   ProjectRuntime::Get().Begin();
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"project\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
 
   auto display = board.GetDisplay();
   display->SetContentRenderer([this](Canvas& canvas, int x, int y, int w, int h, const Theme& theme) {
@@ -219,6 +222,7 @@ void App::Start() {
   console.SetCommandHandler([this](const ConsoleClient::Command& command) { return HandleConsoleCommand(command); });
   console.SetOnChange([display]() { display->Invalidate(); });
   console.Begin();
+  Serial.printf("{\"event\":\"boot\",\"stage\":\"ready\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
 }
 
 void App::ApplySettings() {
