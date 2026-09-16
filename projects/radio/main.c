@@ -1,26 +1,36 @@
 #include "project_api.h"
 
-struct Station { const char *id, *name, *url; };
+struct Station { const char *id, *name, *lang, *url; };
 static const struct Station stations[] = {
-  {"farda", "Radio Farda", "https://stream.radiojar.com/cp13r2cpn3quv"},
-  {"navahang", "Navahang", "https://navairan.com/;stream.nsv"},
-  {"bbc", "BBC World Service", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
-  {"dlf", "Deutschlandfunk", "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3"},
-  {"ndrinfo", "NDR Info", "https://icecast.ndr.de/ndr/ndrinfo/live/mp3/128/stream.mp3"},
-  {"1live", "1LIVE", "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
+  {"farda", "Radio Farda", "FA", "https://stream.radiojar.com/cp13r2cpn3quv"},
+  {"navahang", "Navahang", "FA", "https://navairan.com/;stream.nsv"},
+  {"bbc", "BBC World Service", "EN", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
+  {"dlf", "Deutschlandfunk", "DE", "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3"},
+  {"ndrinfo", "NDR Info", "DE", "https://icecast.ndr.de/ndr/ndrinfo/live/mp3/128/stream.mp3"},
+  {"1live", "1LIVE", "DE", "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
 };
 #define STATION_COUNT (sizeof(stations) / sizeof(stations[0]))
 #define MAX_CUSTOM 3
 #define CUSTOM_URL_CAP 128
+#define CUSTOM_NAME_CAP 24
+#define CUSTOM_LANG_CAP 4
 
-// User-supplied stream URLs (project settings custom1..3), appended after the built-in list.
-// Their labels are generic since only a URL is configured, no display name.
+// User-supplied stations (project settings custom1..3: URL, name, language), appended after the
+// built-in list. Names are ASCII-only (enforced server-side in project-config.ts) since the
+// device's bitmap font only has printable ASCII glyphs.
 static char custom_urls[MAX_CUSTOM][CUSTOM_URL_CAP];
+static char custom_names[MAX_CUSTOM][CUSTOM_NAME_CAP];
+static char custom_langs[MAX_CUSTOM][CUSTOM_LANG_CAP];
 static int custom_count = 0;
 
 static int total_stations(void) { return (int)STATION_COUNT + custom_count; }
 static const char *station_name(int i) {
-  return i < (int)STATION_COUNT ? stations[i].name : "Custom station";
+  if (i < (int)STATION_COUNT) return stations[i].name;
+  const char *custom = custom_names[i - STATION_COUNT];
+  return custom[0] ? custom : "Custom station";
+}
+static const char *station_lang(int i) {
+  return i < (int)STATION_COUNT ? stations[i].lang : custom_langs[i - STATION_COUNT];
 }
 static const char *station_url(int i) {
   return i < (int)STATION_COUNT ? stations[i].url : custom_urls[i - STATION_COUNT];
@@ -60,25 +70,35 @@ static void append_int(char *buf, int *pos, int capacity, int value) {
   buf[*pos] = 0;
 }
 
-// data[1] is up to 3 stream URLs, pipe-joined (project_data in the console's sync route); an
-// empty slot between pipes means that custom station is unset. Only entries that look like a
-// stream URL are kept — radio_start() itself rejects anything else, this just avoids wasting a
-// station slot on a blank or malformed one.
+// data[1] is 3 slots of "url|name|lang", pipe-joined (project_data in the console's sync
+// route) — 9 fields total. A slot whose url doesn't look like a stream URL is dropped
+// entirely (radio_start() would reject it anyway; this just avoids wasting a station on a
+// blank or malformed one), even if its name/lang were filled in.
+static void take_field(const char **p, char *out, int capacity) {
+  const char *start = *p;
+  while (**p && **p != '|') ++(*p);
+  int len = (int)(*p - start);
+  if (len > capacity - 1) len = capacity - 1;
+  int i = 0;
+  for (; i < len; ++i) out[i] = start[i];
+  out[i] = 0;
+  if (**p == '|') ++(*p);
+}
 static void parse_custom(const char *blob) {
   custom_count = 0;
   const char *p = blob;
   for (int slot = 0; slot < MAX_CUSTOM; ++slot) {
-    const char *start = p;
-    while (*p && *p != '|') ++p;
-    const int len = (int)(p - start);
-    const int looks_like_url = starts_with(start, len, "http://") || starts_with(start, len, "https://");
-    if (looks_like_url && len < CUSTOM_URL_CAP) {
-      int i = 0;
-      for (; i < len; ++i) custom_urls[custom_count][i] = start[i];
-      custom_urls[custom_count][i] = 0;
+    char url[CUSTOM_URL_CAP], name[CUSTOM_NAME_CAP], lang[CUSTOM_LANG_CAP];
+    take_field(&p, url, sizeof(url));
+    take_field(&p, name, sizeof(name));
+    take_field(&p, lang, sizeof(lang));
+    if (starts_with(url, CUSTOM_URL_CAP, "http://") ||
+        starts_with(url, CUSTOM_URL_CAP, "https://")) {
+      copy(custom_urls[custom_count], url, CUSTOM_URL_CAP);
+      copy(custom_names[custom_count], name, CUSTOM_NAME_CAP);
+      copy(custom_langs[custom_count], lang[0] ? lang : "EN", CUSTOM_LANG_CAP);
       ++custom_count;
     }
-    if (*p == '|') ++p;
   }
 }
 
@@ -107,15 +127,40 @@ static int double_tap(struct TapState *tap, int pressed, uint32_t held_ms, uint3
   return fired;
 }
 
-static void spinner(struct ProjectFrame *f, int x, int y) {
-  static const int8_t offset[8][2] = {
-    {0, -9}, {6, -6}, {9, 0}, {6, 6}, {0, 9}, {-6, 6}, {-9, 0}, {-6, -6}
-  };
-  const int head = (f->frame_ms / 110) % 8;
-  for (int i = 0; i < 8; ++i) {
-    const int age = (head + 8 - i) % 8;
-    f->circle(f->canvas, x + offset[i][0], y + offset[i][1], age == 0 ? 2 : 1,
-              age <= 2 ? f->accent : f->muted);
+static void loading_ring(struct ProjectFrame *f, int x, int y) {
+  // The power-hold overlay uses a muted track and a bright clockwise arc.
+  // Stream buffering has no measurable percentage, so the arc rotates instead of filling.
+  const int radius = 15, start = (f->frame_ms / 7) % 360;
+  const float radians = 0.017453293f;
+  f->ring(f->canvas, x, y, radius, 4, f->muted);
+  for (int degree = 0; degree < 120; degree += 10) {
+    const float a = (start + degree - 90) * radians;
+    const float b = (start + degree + 10 - 90) * radians;
+    f->line(f->canvas,
+            x + (int)(radius * f->cosine(a)), y + (int)(radius * f->sine(a)),
+            x + (int)(radius * f->cosine(b)), y + (int)(radius * f->sine(b)),
+            4, f->accent);
+  }
+}
+
+static void side_meters(struct ProjectFrame *f, int playing) {
+  enum { kTop = 58, kSegments = 8, kStep = 4 };
+  const int left = 8, right = f->width - 16;
+  const int volume = f->volume < 0 ? 0 : f->volume > 100 ? 100 : f->volume;
+  const int volume_segments = (volume * kSegments + 99) / 100;
+  // These are visual playback bars; ProjectFrame does not expose audio amplitude.
+  const int animated = playing ? 3 + (int)((f->frame_ms / 160 + (f->frame_ms / 390) % 5) % 6) : 0;
+  f->rect(f->canvas, left - 2, kTop - 2, 12, 36, f->muted);
+  f->rect(f->canvas, right - 2, kTop - 2, 12, 36, f->muted);
+  for (int segment = 0; segment < kSegments; ++segment) {
+    const int y = kTop + (kSegments - 1 - segment) * kStep;
+    if (segment < animated) {
+      const uint16_t color = segment < 3 ? 0x07e0 : segment < 6 ? 0xffe0 : 0xf800;
+      f->fill_rect(f->canvas, left, y, 8, 3, color);
+    }
+    if (segment < volume_segments) {
+      f->fill_rect(f->canvas, right, y, 8, 3, f->accent);
+    }
   }
 }
 
@@ -125,7 +170,7 @@ int app_main(int argc, char **argv) {
   if (f->abi != DISPLAY_PROJECT_ABI) return -1;
   static int station = -1;
   static char last_config[20] = "";
-  static char last_custom[3 * CUSTOM_URL_CAP] = "";
+  static char last_custom[3 * (CUSTOM_URL_CAP + CUSTOM_NAME_CAP + CUSTOM_LANG_CAP)] = "";
   const char *config = f->data[0] ? f->data[0] : "";
   const char *custom_blob = f->data[1] ? f->data[1] : "";
   if (station < 0 || !same(config, last_config) || !same(custom_blob, last_custom)) {
@@ -162,7 +207,7 @@ int app_main(int argc, char **argv) {
     }
   }
 
-  char status[40], header[24], info[32];
+  char status[40], header[24], info[32], name[CUSTOM_NAME_CAP + 8];
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
   const int reconnecting = state == 4 && same(status, "Reconnecting");
@@ -176,22 +221,28 @@ int app_main(int argc, char **argv) {
   append_int(header, &hp, sizeof(header), station + 1);
   append(header, &hp, sizeof(header), "/");
   append_int(header, &hp, sizeof(header), total_stations());
-  f->label(f->canvas, 8, header, f->muted, 1);
-  f->line(f->canvas, 8, 23, f->width - 8, 23, 1, f->accent);
-  const char *name = station_name(station);
+  f->label(f->canvas, 5, header, f->muted, 1);
+  f->line(f->canvas, 8, 20, f->width - 8, 20, 1, f->accent);
+  // "FA Radio Farda": the language tag rides in front of the name rather than on its own line —
+  // screen's too small to spare a row for it, and it stays right next to what it describes.
+  int np = 0;
+  append(name, &np, sizeof(name), station_lang(station));
+  append(name, &np, sizeof(name), " ");
+  append(name, &np, sizeof(name), station_name(station));
   const int name_scale = f->text_width(name, 2) <= f->width - 8 ? 2 : 1;
-  f->label(f->canvas, name_scale == 2 ? 42 : 47, name, f->text, name_scale);
-  f->label(f->canvas, 62, status, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
+  f->label(f->canvas, name_scale == 2 ? 30 : 35, name, f->text, name_scale);
+  f->label(f->canvas, 49, status, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
+  side_meters(f, state == 3);
   if (state == 3) {
-    for (int i = 0; i < 7; ++i) {
-      int bar = 4 + ((f->frame_ms / 170 + i * 7) % (i + 5)) * 2;
-      f->fill_rect(f->canvas, center - 25 + i * 8, 86 - bar, 4, bar, f->accent);
-    }
+    f->ring(f->canvas, center, 74, 15, 2, f->muted);
+    f->line(f->canvas, center - 4, 67, center + 6, 74, 2, f->accent);
+    f->line(f->canvas, center + 6, 74, center - 4, 81, 2, f->accent);
+    f->line(f->canvas, center - 4, 81, center - 4, 67, 2, f->accent);
   } else if (state == 1 || state == 2 || reconnecting) {
-    spinner(f, center, 80);
+    loading_ring(f, center, 74);
   } else if (state == 4) {
-    f->ring(f->canvas, center, 80, 9, 2, 0xf800);
-    f->label(f->canvas, 75, "!", 0xf800, 1);
+    f->ring(f->canvas, center, 74, 15, 2, 0xf800);
+    f->label(f->canvas, 70, "!", 0xf800, 1);
   }
   int ip = 0;
   append(info, &ip, sizeof(info), "VOL ");
@@ -202,7 +253,7 @@ int app_main(int argc, char **argv) {
     append_int(info, &ip, sizeof(info), kbps);
     append(info, &ip, sizeof(info), "k");
   }
-  f->label(f->canvas, f->height - 22, info, f->text, 1);
+  f->label(f->canvas, f->height - 20, info, f->text, 1);
   f->label(f->canvas, f->height - 9,
            (f->frame_ms / 4000) % 2 ? "Hold +/-: volume" : "2x +/-: station", f->muted, 1);
   return 0;

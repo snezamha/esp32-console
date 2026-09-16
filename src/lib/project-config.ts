@@ -17,6 +17,9 @@ export type ProjectSettingDefinition = {
   /** "text" only: trimmed and truncated to this length; also keeps the on-device data payload bounded. */
   maxLength?: number;
   placeholder?: string;
+  /** "text" only: strips anything outside printable ASCII (0x20-0x7E) — the device's bitmap font
+   * only has those glyphs, so a non-English name would draw as blanks or garbage on screen. */
+  asciiOnly?: boolean;
 };
 // Declared rather than inferred from the manifest JSON: inference breaks as soon as catalog entries
 // differ in shape (for example one project with SD card assets and one without).
@@ -87,7 +90,10 @@ export function sanitizeProjectConfig(projectId: string, input: unknown, base?: 
       const number = Number(value);
       if (Number.isFinite(number)) output[setting.key] = Math.min(setting.max ?? number, Math.max(setting.min ?? number, number));
     } else if (setting.type === "text") {
-      if (typeof value === "string") output[setting.key] = value.trim().slice(0, setting.maxLength ?? 256);
+      if (typeof value === "string") {
+        const ascii = setting.asciiOnly ? value.replace(/[^\x20-\x7E]/g, "") : value;
+        output[setting.key] = ascii.trim().slice(0, setting.maxLength ?? 256);
+      }
     } else if (setting.type === "location" && value && typeof value === "object" && !Array.isArray(value)) {
       const location = value as Record<string, unknown>;
       const latitude = Number(location.latitude), longitude = Number(location.longitude);

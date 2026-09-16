@@ -32,6 +32,10 @@ const radioCustom = projectConfig.sanitizeProjectConfig("radio", { custom1: "  h
 assert.equal(radioCustom.custom1, "https://example.com/stream.mp3", "Text settings must be trimmed");
 assert.equal(radioCustom.custom2.length, 120, "Text settings must be capped at their manifest maxLength");
 assert.equal(projectConfig.sanitizeProjectConfig("radio", { custom3: 5 }).custom3, "", "Non-string values must not overwrite a text setting's default");
+const radioName = projectConfig.sanitizeProjectConfig("radio", { custom1_name: "Café Perse ۱۲۳", custom1_lang: "FA", custom2_lang: "invalid" });
+assert.equal(radioName.custom1_name, "Caf Perse", "asciiOnly must strip non-ASCII characters (accents, Persian digits, ...)");
+assert.equal(radioName.custom1_lang, "FA");
+assert.equal(radioName.custom2_lang, "EN", "An unlisted select value must fall back to the manifest default");
 assert.throws(() => projectConfig.sanitizeProjectConfig("missing", {}), /Unknown project/);
 delete globalThis.__projectConfigTest;
 for (const project of manifest.projects) {

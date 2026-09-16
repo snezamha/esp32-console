@@ -1,9 +1,9 @@
 {
   "id": "radio",
   "name": "Internet radio",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "abi": 5,
-  "description": "Stream live MP3 radio: Persian, German and BBC stations, plus up to 3 of your own. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
+  "description": "Stream live MP3 radio: Persian, German and BBC stations, plus up to 3 of your own, each with its own name and language. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
   "category": "Music",
   "icon": "radio",
   "accent": "#f97316",
@@ -33,6 +33,32 @@
       "placeholder": "https://example.com/stream.mp3"
     },
     {
+      "key": "custom1_name",
+      "type": "text",
+      "label": "Custom station 1 name",
+      "default": "",
+      "maxLength": 20,
+      "asciiOnly": true,
+      "placeholder": "English letters only"
+    },
+    {
+      "key": "custom1_lang",
+      "type": "select",
+      "label": "Custom station 1 language",
+      "default": "EN",
+      "options": [
+        { "value": "EN", "label": "English" },
+        { "value": "FA", "label": "Persian" },
+        { "value": "DE", "label": "German" },
+        { "value": "AR", "label": "Arabic" },
+        { "value": "TR", "label": "Turkish" },
+        { "value": "FR", "label": "French" },
+        { "value": "ES", "label": "Spanish" },
+        { "value": "RU", "label": "Russian" },
+        { "value": "XX", "label": "Other" }
+      ]
+    },
+    {
       "key": "custom2",
       "type": "text",
       "label": "Custom station 2 (stream URL)",
@@ -41,12 +67,64 @@
       "placeholder": "https://example.com/stream.mp3"
     },
     {
+      "key": "custom2_name",
+      "type": "text",
+      "label": "Custom station 2 name",
+      "default": "",
+      "maxLength": 20,
+      "asciiOnly": true,
+      "placeholder": "English letters only"
+    },
+    {
+      "key": "custom2_lang",
+      "type": "select",
+      "label": "Custom station 2 language",
+      "default": "EN",
+      "options": [
+        { "value": "EN", "label": "English" },
+        { "value": "FA", "label": "Persian" },
+        { "value": "DE", "label": "German" },
+        { "value": "AR", "label": "Arabic" },
+        { "value": "TR", "label": "Turkish" },
+        { "value": "FR", "label": "French" },
+        { "value": "ES", "label": "Spanish" },
+        { "value": "RU", "label": "Russian" },
+        { "value": "XX", "label": "Other" }
+      ]
+    },
+    {
       "key": "custom3",
       "type": "text",
       "label": "Custom station 3 (stream URL)",
       "default": "",
       "maxLength": 120,
       "placeholder": "https://example.com/stream.mp3"
+    },
+    {
+      "key": "custom3_name",
+      "type": "text",
+      "label": "Custom station 3 name",
+      "default": "",
+      "maxLength": 20,
+      "asciiOnly": true,
+      "placeholder": "English letters only"
+    },
+    {
+      "key": "custom3_lang",
+      "type": "select",
+      "label": "Custom station 3 language",
+      "default": "EN",
+      "options": [
+        { "value": "EN", "label": "English" },
+        { "value": "FA", "label": "Persian" },
+        { "value": "DE", "label": "German" },
+        { "value": "AR", "label": "Arabic" },
+        { "value": "TR", "label": "Turkish" },
+        { "value": "FR", "label": "French" },
+        { "value": "ES", "label": "Spanish" },
+        { "value": "RU", "label": "Russian" },
+        { "value": "XX", "label": "Other" }
+      ]
     }
   ]
 }
