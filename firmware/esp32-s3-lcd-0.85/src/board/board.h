@@ -80,12 +80,18 @@ class Board {
   void InitializeSpi();
   void InitializeLcdDisplay();
   void InitializeButtons();
+  // Advances `button`'s output volume by `direction` * a fixed step, repeating at a fixed
+  // interval for as long as it's held past the radio project's tap/hold split. `next_at_ms` is
+  // this button's own timer (ramp_up_next_ms_ or ramp_down_next_ms_), reset to 0 on release.
+  void RampRadioVolume(Button& button, int direction, uint32_t& next_at_ms);
 
   Button pwr_button_;
   Button volume_up_button_;
   Button volume_down_button_;
   bool pwr_button_armed_ = false;
   bool volume_combo_latched_ = false;
+  uint32_t ramp_up_next_ms_ = 0;
+  uint32_t ramp_down_next_ms_ = 0;
   bool menu_open_ = false;
   std::function<void(MenuKey)> menu_key_handler_;
   std::function<bool()> power_hold_interceptor_;

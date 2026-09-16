@@ -46,7 +46,6 @@ int app_main(int argc, char **argv) {
   struct ProjectFrame *f = (struct ProjectFrame *)argv[0];
   if (f->abi != DISPLAY_PROJECT_ABI) return -1;
   static int station = -1;
-  static int up_latched = 0, down_latched = 0;
   static char last_config[20] = "";
   const char *config = f->data[0] ? f->data[0] : "";
   if (station < 0 || !same(config, last_config)) {
@@ -54,27 +53,45 @@ int app_main(int argc, char **argv) {
     station = configured(config);
     f->radio_start(stations[station].url);
   }
-  if (f->button_held_ms[1] >= 750 && !up_latched) {
-    up_latched = 1;
-    station = (station + 1) % STATION_COUNT;
-    f->radio_start(stations[station].url);
+
+  // A tap (release before kTapMaxMs) changes station; anything held longer is the board's own
+  // volume ramp instead (see Board::RampRadioVolume in board.cpp — kept in step with this value),
+  // so it must not also advance the station once released. button_held_ms resets to 0 the instant
+  // the button is up, so the peak while it was still down has to be tracked across frames.
+  enum { kTapMaxMs = 350 };
+  static int up_was_pressed = 0, down_was_pressed = 0;
+  static uint32_t up_peak_ms = 0, down_peak_ms = 0;
+  const int up_pressed = (f->buttons & 2) != 0;
+  const int down_pressed = (f->buttons & 4) != 0;
+  if (up_pressed) {
+    if (f->button_held_ms[1] > up_peak_ms) up_peak_ms = f->button_held_ms[1];
+  } else {
+    if (up_was_pressed && up_peak_ms > 0 && up_peak_ms < kTapMaxMs) {
+      station = (station + 1) % STATION_COUNT;
+      f->radio_start(stations[station].url);
+    }
+    up_peak_ms = 0;
   }
-  if (f->button_held_ms[2] >= 750 && !down_latched) {
-    down_latched = 1;
-    station = (station + STATION_COUNT - 1) % STATION_COUNT;
-    f->radio_start(stations[station].url);
+  if (down_pressed) {
+    if (f->button_held_ms[2] > down_peak_ms) down_peak_ms = f->button_held_ms[2];
+  } else {
+    if (down_was_pressed && down_peak_ms > 0 && down_peak_ms < kTapMaxMs) {
+      station = (station + STATION_COUNT - 1) % STATION_COUNT;
+      f->radio_start(stations[station].url);
+    }
+    down_peak_ms = 0;
   }
-  if (!(f->buttons & 2)) up_latched = 0;
-  if (!(f->buttons & 4)) down_latched = 0;
+  up_was_pressed = up_pressed;
+  down_was_pressed = down_pressed;
 
   char status[40], header[24], bottom[32];
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
   const int center = f->width / 2;
 
-  // "RADIO 3/11": station position is otherwise invisible while cycling stations blind with
-  // holds, and every label() centers on the full width, so it rides on the same line as the
-  // title rather than needing a dedicated corner.
+  // "RADIO 3/11": station position is otherwise invisible while tapping through stations blind,
+  // and every label() centers on the full width, so it rides on the same line as the title
+  // rather than needing a dedicated corner.
   int hp = 0;
   append(header, &hp, sizeof(header), "RADIO ");
   append_int(header, &hp, sizeof(header), station + 1);
@@ -97,7 +114,7 @@ int app_main(int argc, char **argv) {
     append_int(bottom, &bp, sizeof(bottom), kbps);
     append(bottom, &bp, sizeof(bottom), "k - +/-");
   } else {
-    append(bottom, &bp, sizeof(bottom), "Hold +/-: station");
+    append(bottom, &bp, sizeof(bottom), "Tap +/-: station");
   }
   f->label(f->canvas, f->height - 9, bottom, f->muted, 1);
   return 0;

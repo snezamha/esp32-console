@@ -1,9 +1,9 @@
 {
   "id": "radio",
   "name": "Internet radio",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "abi": 5,
-  "description": "Stream live MP3 radio, including Persian, German and BBC stations. Hold + or − to change stations; tap to adjust volume.",
+  "description": "Stream live MP3 radio, including Persian, German and BBC stations. Tap + or − to change stations; hold to adjust volume.",
   "category": "Music",
   "icon": "radio",
   "accent": "#f97316",

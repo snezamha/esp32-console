@@ -140,6 +140,10 @@ void Board::InitializeButtons() {
       if (menu_key_handler_) menu_key_handler_(MenuKey::Up);
       return;
     }
+    // While the radio project is active, a tap changes station instead (it reads the same click
+    // as a quick press-release in Loop()'s RampRadioVolume() call below) and a hold ramps volume,
+    // so this ordinary step-by-10 behavior is reserved for every other screen.
+    if (RadioStream::Get().Active()) return;
     const int volume = std::min(audio_codec_->output_volume() + 10, 100);
     audio_codec_->SetOutputVolume(volume);
     display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
@@ -148,7 +152,7 @@ void Board::InitializeButtons() {
 
   volume_up_button_.OnLongPress([this]() {
     if (menu_open_) return;
-    if (RadioStream::Get().Active()) return;  // Radio project uses a hold to change stations.
+    if (RadioStream::Get().Active()) return;  // Radio ramps volume continuously instead; see Loop().
     audio_codec_->SetOutputVolume(100);
     display_->ShowNotification(Lang::Strings::MAX_VOLUME);
   });
@@ -158,6 +162,7 @@ void Board::InitializeButtons() {
       if (menu_key_handler_) menu_key_handler_(MenuKey::Down);
       return;
     }
+    if (RadioStream::Get().Active()) return;  // See the matching comment on volume_up_button_.
     const int volume = std::max(audio_codec_->output_volume() - 10, 0);
     audio_codec_->SetOutputVolume(volume);
     display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
@@ -208,17 +213,41 @@ void Board::Loop() {
     volume_down_button_.Cancel();
   }
 
-  // The radio changes stations at 750 ms. Suppress the delayed volume click when
-  // that hold is released before Button's ordinary 1500 ms long-press threshold.
+  // While the radio project is active, a quick tap changes station (the project reads it off
+  // button_held_ms itself) and a hold past kRadioRampStartMs ramps volume continuously here,
+  // rather than the ordinary click-to-step-by-10 / 1.5 s-long-press-to-extreme behavior.
   if (!menu_open_ && RadioStream::Get().Active()) {
-    if (up && volume_up_button_.HeldMs() >= 750) volume_up_button_.Cancel();
-    if (down && volume_down_button_.HeldMs() >= 750) volume_down_button_.Cancel();
+    RampRadioVolume(volume_up_button_, 1, ramp_up_next_ms_);
+    RampRadioVolume(volume_down_button_, -1, ramp_down_next_ms_);
+  } else {
+    ramp_up_next_ms_ = ramp_down_next_ms_ = 0;
   }
 
   if (pwr_button_.IsPressed() || volume_up_button_.IsPressed() ||
       volume_down_button_.IsPressed()) {
     idle_seconds_ = 0;
   }
+}
+
+void Board::RampRadioVolume(Button& button, int direction, uint32_t& next_at_ms) {
+  // Below kRadioRampStartMs a release still counts as the project's tap-to-change-station (see
+  // main.c in the radio project), so nothing must happen here yet or the two would fight over
+  // the same press. kStepPercent is gentler than the ordinary tap's +/-10 jump: a press held for
+  // a couple of seconds should sweep the range, not overshoot it in three ticks.
+  constexpr uint32_t kRadioRampStartMs = 350;
+  constexpr uint32_t kStepIntervalMs = 120;
+  constexpr int kStepPercent = 4;
+  if (!button.IsPressed() || button.HeldMs() < kRadioRampStartMs) {
+    next_at_ms = 0;
+    return;
+  }
+  const uint32_t now = millis();
+  if (next_at_ms != 0 && now < next_at_ms) return;
+  next_at_ms = now + kStepIntervalMs;
+  const int volume = std::clamp(audio_codec_->output_volume() + direction * kStepPercent, 0, 100);
+  audio_codec_->SetOutputVolume(volume);
+  display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
+  Serial.printf("{\"event\":\"volume\",\"volume\":%d}\n", volume);
 }
 
 void Board::OnClockTick(bool busy) {
