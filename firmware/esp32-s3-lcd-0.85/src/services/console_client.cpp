@@ -10,6 +10,8 @@
 
 #include <algorithm>
 
+#include "heap_guard.h"
+
 #include "../../version.h"
 #include "../board/board.h"
 #include "../common/settings.h"
@@ -283,10 +285,14 @@ void ConsoleClient::Loop(uint32_t now_ms) {
   // Only ever one network task in flight (this poll, or the OTA download): the Wi-Fi/lwIP stack
   // is not safe against two concurrent requests. A local change (settings, check results) goes
   // up on the poll after this one, not instantly.
+#if CONSOLE_DIAG_NO_POLL
+  (void)kMinPollIntervalMs;
+#else
   if (!poll_.busy && static_cast<int32_t>(now_ms - next_poll_ms_) >= 0 &&
       now_ms - last_poll_start_ms_ >= kMinPollIntervalMs && !ota_active_) {
     StartPoll(now_ms);
   }
+#endif
 }
 
 std::string ConsoleClient::CommonFields() {
@@ -363,9 +369,12 @@ void ConsoleClient::RequestTask(void* arg) {
   // unwinding the stack — anything still in scope at that point would never be destructed and
   // its memory never reclaimed, leaking a full TLS session (tens of KB) on every single request.
   {
-    HTTPClient http;
+    // Declared before the HTTPClient on purpose: ~HTTPClient() calls _client->stop() through a
+    // raw pointer to one of these, so the HTTPClient must be destroyed first. The reverse order
+    // closes an already-recycled socket descriptor and corrupts the lwIP TCP queues.
     WiFiClient plain;
     WiFiClientSecure secure;
+    HTTPClient http;
     if (slot->tls) AttachCertificates(secure, slot->insecure);
 
     // Each request owns a short-lived client and task. Close its TCP connection before either
@@ -373,12 +382,15 @@ void ConsoleClient::RequestTask(void* arg) {
     http.useHTTP10(true);
     http.setTimeout(slot->timeout_ms);
     http.setConnectTimeout(10000);
+    HeapGuard::Phase("console:request");
+    HeapGuard::Check("console:request_begin");
     const bool begun = slot->tls ? http.begin(secure, slot->url.c_str()) : http.begin(plain, slot->url.c_str());
     if (begun) {
       http.addHeader("Content-Type", "application/x-www-form-urlencoded");
       code = http.POST(slot->body.c_str());
       if (code > 0) body = http.getString().c_str();
       http.end();
+      HeapGuard::Check("console:request_end");
     } else {
       code = -100;  // Distinct from a POST failure, which returns its own HTTPC_ERROR_*.
     }
@@ -574,9 +586,12 @@ void ConsoleClient::OtaTask(void* arg) {
   // destructors, so HTTPClient/WiFiClientSecure/WiFiClient must go out of scope (freeing the
   // TLS session) before it, or every update leaks one.
   {
-    HTTPClient http;
+    // Declared before the HTTPClient on purpose: ~HTTPClient() calls _client->stop() through a
+    // raw pointer to one of these, so the HTTPClient must be destroyed first. The reverse order
+    // closes an already-recycled socket descriptor and corrupts the lwIP TCP queues.
     WiFiClient plain;
     WiFiClientSecure secure;
+    HTTPClient http;
     const bool tls = self->ota_url_.rfind("https://", 0) == 0;
     if (tls) AttachCertificates(secure, self->insecure_);
 

@@ -16,6 +16,7 @@
 #include "runtime/project_runtime.h"
 #include "lang.h"
 #include "services/device_config.h"
+#include "services/heap_guard.h"
 #include "services/led_feedback.h"
 #include "led/led_pattern.h"
 #include "services/network.h"
@@ -155,16 +156,22 @@ void App::Start() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
 
+  HeapGuard::Begin();
+  HeapGuard::Phase("boot:start");
   DeviceConfig::Get().Load();
   Serial.printf("{\"event\":\"boot\",\"stage\":\"start\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
 
   auto& board = Board::GetInstance();
   board.Initialize();
   Serial.printf("{\"event\":\"boot\",\"stage\":\"board\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
+  HeapGuard::Phase("boot:board");
+  HeapGuard::Check("boot:board");
   // Needs the SD card, so it must run after Initialize() creates it, and before the display's
   // first draw so a saved project is already loaded.
   ProjectRuntime::Get().Begin();
   Serial.printf("{\"event\":\"boot\",\"stage\":\"project\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
+  HeapGuard::Phase("boot:project");
+  HeapGuard::Check("boot:project");
 
   auto display = board.GetDisplay();
   display->SetContentRenderer([this](Canvas& canvas, int x, int y, int w, int h, const Theme& theme) {
@@ -195,6 +202,8 @@ void App::Start() {
   display->UpdateStatusBar(true);
   display->Loop();  // Splash while the backlight fades in
   Serial.printf("{\"event\":\"boot\",\"stage\":\"ui\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
+  HeapGuard::Phase("boot:ui");
+  HeapGuard::Check("boot:ui");
   if (ProjectRuntime::Get().SafeMode()) display->ShowNotification("Project safe mode", 6000);
 
   menu_.on_change = [this]() {
@@ -218,8 +227,12 @@ void App::Start() {
 
   ApplySettings();
   Serial.printf("{\"event\":\"boot\",\"stage\":\"settings\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
+  HeapGuard::Phase("boot:settings");
+  HeapGuard::Check("boot:settings");
   Network::GetInstance().Begin();
   Serial.printf("{\"event\":\"boot\",\"stage\":\"network\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
+  HeapGuard::Phase("boot:network");
+  HeapGuard::Check("boot:network");
 
   auto& console = ConsoleClient::GetInstance();
   console.SetStateProvider([this]() { return ReportState(); });
@@ -229,6 +242,8 @@ void App::Start() {
   console.SetOnChange([display]() { display->Invalidate(); });
   console.Begin();
   Serial.printf("{\"event\":\"boot\",\"stage\":\"ready\",\"heap\":%lu}\n", (unsigned long)ESP.getFreeHeap());
+  HeapGuard::Phase("boot:ready");
+  HeapGuard::Check("boot:ready");
 }
 
 void App::ApplySettings() {

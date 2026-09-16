@@ -25,6 +25,7 @@
 #include "../hw_test.h"
 #include "../services/network.h"
 #include "../services/sd_files.h"
+#include "../services/heap_guard.h"
 #include "../services/radio_stream.h"
 extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
@@ -367,7 +368,8 @@ struct HttpJob { uint32_t generation; std::string url; };
 void HttpTask(void* raw) {
   std::unique_ptr<HttpJob> job(static_cast<HttpJob*>(raw));
   int status = -1; std::string payload;
-  HTTPClient http; NetworkClient plain; NetworkClientSecure secure;
+  // ~HTTPClient() calls _client->stop() through a raw pointer, so the clients must outlive it.
+  NetworkClient plain; NetworkClientSecure secure; HTTPClient http;
   const bool tls = job->url.rfind("https://", 0) == 0;
   if (tls) secure.setCACertBundle(kCertBundleStart, kCertBundleEnd - kCertBundleStart);
   NetworkClient& client = tls ? static_cast<NetworkClient&>(secure) : plain;
@@ -686,12 +688,14 @@ bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const Metadata&
   esp_elf_t candidate{};
   Metadata metadata;
   { Settings s("project", true); s.SetString("phase", "ELF relocation"); }
+  HeapGuard::Phase("project:relocate"); HeapGuard::Check("project:before_relocate");
   stage_ = 3; Log("Validating and relocating the project ELF into internal executable memory.");
   if (!mounted_ || !Load(bytes, candidate, metadata) || metadata.id != expected.id || metadata.version != expected.version) return false;
   char addresses[96]; snprintf(addresses, sizeof(addresses), "ELF loaded: entry %p, code %p, data %p.", reinterpret_cast<void*>(candidate.entry), candidate.ptext, candidate.pdata);
   Log(addresses);
   { Settings s("project", true); s.SetString("phase", "flash write"); }
   const int next_slot = 1 - slot_;
+  HeapGuard::Check("project:after_relocate");
   stage_ = 4; Log("Writing verified file to inactive project flash slot.");
   auto file = LittleFS.open(Path(next_slot).c_str(), "w");
   if (!file || file.write(bytes.data(), bytes.size()) != bytes.size()) { esp_elf_deinit(&candidate); return false; }
@@ -708,6 +712,7 @@ bool ProjectRuntime::Activate(const std::vector<uint8_t>& bytes, const Metadata&
   elf_ = candidate; loaded_ = true; slot_ = next_slot; id_ = metadata.id; version_ = metadata.version; sha256_ = expected_sha256_; abi_ = metadata.abi;
   UseAssets(assets_sha256_);
   data_[0].clear(); data_[1].clear(); data_at_ = 0;
+  HeapGuard::Phase("project:first_frame"); HeapGuard::Check("project:before_first_frame");
   testing_ = true; healthy_recorded_ = false; first_frame_at_ = 0; stage_ = 5; Log("Testing the first project frame before confirming installation.");
   return true;
 }
@@ -912,7 +917,8 @@ std::string ProjectRuntime::InstallAssets(HTTPClient& http, NetworkClient& clien
 void ProjectRuntime::DownloadTask(void* arg) {
   auto self = static_cast<ProjectRuntime*>(arg);
   {
-    HTTPClient http; NetworkClient plain; NetworkClientSecure secure;
+    // ~HTTPClient() calls _client->stop() through a raw pointer, so the clients must outlive it.
+    NetworkClient plain; NetworkClientSecure secure; HTTPClient http;
     const bool tls = self->url_.rfind("https://", 0) == 0;
     if (tls) {
       if (self->insecure_) secure.setInsecure();
@@ -1056,6 +1062,7 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
     testing_ = false; stage_ = 6; progress_ = 100; ack_ok_ = true; ack_ready_ = true;
     first_frame_at_ = millis();
     { Settings s("project", true); s.SetBool("trial", false); s.SetString("pending", ""); }
+    HeapGuard::Check("project:after_first_frame");
     Log("Project activated successfully. First display frame completed.");
     if (sd_required_) { CleanupAssets(); RefreshSd(); }
   }

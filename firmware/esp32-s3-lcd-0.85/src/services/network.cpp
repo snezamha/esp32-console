@@ -9,9 +9,19 @@
 
 #include "../board/board.h"
 #include "device_config.h"
+#include "heap_guard.h"
 #include "time_zones.h"
 
 namespace {
+
+// Wi-Fi interfaces going up and down under open TCP connections is the prime suspect for the
+// lwIP "pbuf_free: p->ref > 0" panic, so every mode change is on the record.
+void LogNet(const char* event) {
+  HeapGuard::Phase(event);
+  Serial.printf("{\"net\":\"%s\",\"mode\":%d,\"status\":%d,\"ap_clients\":%d,\"up\":%lu}\n",
+                event, static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
+                static_cast<int>(WiFi.softAPgetStationNum()), (unsigned long)(millis() / 1000));
+}
 
 // One attempt at a network before moving on (backup network, then the setup access point).
 constexpr uint32_t kConnectTimeoutMs = 20000;
@@ -72,6 +82,7 @@ void Network::ApplyWifi() {
     if (mdns_started_) MDNS.end();
     mdns_started_ = false;
     if (ap_active_) CloseAccessPoint();
+    LogNet("wifi_off");
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     phase_ = Phase::Off;
@@ -101,9 +112,11 @@ void Network::TryNetwork(int index, bool from_page, uint32_t now_ms) {
   from_page_ = from_page;
   g_disconnect_reason = 0;
 
+  LogNet("try_network");
   WiFi.mode(ap_active_ ? WIFI_AP_STA : WIFI_STA);
   WiFi.disconnect(false);
   WiFi.begin(ssid.c_str(), password.c_str());
+  LogNet("try_network_done");
   phase_ = Phase::Connecting;
   phase_since_ = now_ms;
 }
@@ -122,9 +135,11 @@ void Network::OpenSetup(uint32_t now_ms) {
   if (!ap_active_) {
     // Scan while no phone depends on the radio staying on one channel.
     ScanNow();
+    LogNet("open_ap");
     WiFi.mode(WIFI_AP);
     WiFi.softAP(DeviceName().c_str());
     ap_active_ = true;
+    LogNet("open_ap_done");
     now_ms = millis();  // The scan took a few seconds.
   }
   phase_ = Phase::Setup;
@@ -132,18 +147,24 @@ void Network::OpenSetup(uint32_t now_ms) {
 }
 
 void Network::StopStation() {
+  LogNet("stop_station");
   WiFi.disconnect(false);
   // Leaving station mode stops any search that would pull the access point off its channel.
   WiFi.mode(ap_active_ ? WIFI_AP : WIFI_STA);
 }
 
 void Network::CloseAccessPoint() {
+  LogNet("close_ap");
   WiFi.softAPdisconnect(true);
   WiFi.mode(phase_ == Phase::Off ? WIFI_OFF : WIFI_STA);
   ap_active_ = false;
 }
 
 void Network::StartMdns() {
+#if CONSOLE_DIAG_NO_MDNS
+  mdns_started_ = false;
+  return;
+#endif
   if (mdns_started_) MDNS.end();
   mdns_started_ = MDNS.begin(HostName().c_str());
   if (mdns_started_) MDNS.addService("http", "tcp", 80);
@@ -158,6 +179,7 @@ void Network::Loop(uint32_t now_ms) {
 
     case Phase::Connecting: {
       if (WiFi.status() == WL_CONNECTED) {
+        LogNet("connected");
         phase_ = Phase::Connected;
         connected_at_ = now_ms;
         error_.clear();

@@ -12,6 +12,7 @@
 
 #include "../board/board.h"
 #include "../hw_test.h"
+#include "heap_guard.h"
 #include "network.h"
 
 extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
@@ -23,6 +24,10 @@ constexpr int kMaxOutputSamples = 2304;
 constexpr uint32_t kNoDataTimeoutMs = 12000;
 
 void LogStage(const char* stage, int detail = 0) {
+  char phase[32];
+  snprintf(phase, sizeof(phase), "radio:%s", stage);
+  HeapGuard::Phase(stage);  // Stage strings are literals from the call sites below.
+  HeapGuard::Check(phase);
   Serial.printf("{\"radio\":\"%s\",\"detail\":%d,\"heap\":%u,\"largest\":%u,\"stack\":%u}\n",
                 stage, detail, static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
@@ -133,9 +138,10 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
     SetStatus(generation, 4, "Audio busy");
     return;
   }
-  HTTPClient http;
+  // ~HTTPClient() calls _client->stop() through a raw pointer, so the clients must outlive it.
   NetworkClient plain;
   NetworkClientSecure secure;
+  HTTPClient http;
   const bool tls = url.rfind("https://", 0) == 0;
   if (tls) secure.setCACertBundle(kCertBundleStart, kCertBundleEnd - kCertBundleStart);
   NetworkClient& client = tls ? static_cast<NetworkClient&>(secure) : plain;
@@ -185,6 +191,7 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
   size_t buffered = 0;
   uint32_t last_data = millis();
   bool played = false;
+  uint32_t frames_decoded = 0;
   while (generation == generation_ && http.connected() && !HwTest::GetInstance().IsBusy()) {
     const size_t available = stream->available();
     if (available && buffered < kInputSize) {
@@ -244,6 +251,9 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
       LogStage("first_audio");
     }
     SetStatus(generation, 3, "Playing", info.bitrate / 1000);
+    // The MP3 buffers are the largest writes this task makes; verify the heap every ~100 frames
+    // (roughly every 2.5 s of audio) so an overflow here is caught before lwIP trips over it.
+    if (++frames_decoded % 100 == 0) HeapGuard::Check("radio:decode_loop");
     int written = 0;
     while (written < frames && generation == generation_) {
       const int count = codec->Write(samples + written * 2, frames - written, 300);
