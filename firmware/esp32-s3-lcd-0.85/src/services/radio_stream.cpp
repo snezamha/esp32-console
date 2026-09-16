@@ -19,7 +19,13 @@ extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
 
 namespace {
-constexpr size_t kInputSize = 4096;
+// Network jitter buffer. At 4096 (the old size) this held only ~0.25s of audio at 128kbps, so
+// any Wi-Fi/TCP hiccup (retransmit, beacon-interval stall, a slow moment on the origin server)
+// that outlasted that quarter-second starved the decoder directly — audible as a stutter, and
+// independent of which core does the decoding. 16384 gives ~1s of cushion at 128kbps (less at
+// higher bitrates, still several times the old margin) while staying a small, one-time heap
+// allocation for the duration of playback.
+constexpr size_t kInputSize = 16384;
 constexpr int kMaxOutputSamples = 2304;
 constexpr uint32_t kNoDataTimeoutMs = 12000;
 
