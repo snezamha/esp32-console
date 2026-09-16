@@ -28,6 +28,7 @@ class Button {
   void Tick();
   bool IsPressed() const { return pressed_; }
   void SetLongPressTime(uint16_t ms) { long_press_time_ = ms ? ms : kDefaultLongPressMs; }
+  void SetShortPressTime(uint16_t ms) { short_press_time_ = ms ? ms : kDefaultShortPressMs; }
   // A press held longer than this is not a click, even if released before the long press fires
   // (e.g. a hold-to-power-off that was abandoned). 0 = no limit.
   void SetMaxClickTime(uint16_t ms) { max_click_time_ = ms; }

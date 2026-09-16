@@ -40,6 +40,42 @@ static void append_int(char *buf, int *pos, int capacity, int value) {
   for (int i = 0; i < n && *pos + 1 < capacity; ++i) buf[(*pos)++] = digits[n - i - 1];
   buf[*pos] = 0;
 }
+struct TapState {
+  int was_pressed, second_press;
+  uint32_t peak_ms, pressed_at_ms, last_release_ms;
+};
+static int double_tap(struct TapState *tap, int pressed, uint32_t held_ms, uint32_t now) {
+  enum { kDoubleTapMs = 240, kHoldMs = 350 };
+  if (pressed && !tap->was_pressed) {
+    tap->second_press = tap->last_release_ms && now - tap->last_release_ms <= kDoubleTapMs;
+    tap->peak_ms = 0;
+    tap->pressed_at_ms = now;
+  }
+  if (pressed && held_ms > tap->peak_ms) tap->peak_ms = held_ms;
+  int fired = 0;
+  if (!pressed && tap->was_pressed) {
+    if (tap->peak_ms > 0 && tap->peak_ms < kHoldMs && now - tap->pressed_at_ms < kHoldMs) {
+      fired = tap->second_press;
+      tap->last_release_ms = fired ? 0 : now;
+    } else {
+      tap->last_release_ms = 0;
+    }
+  }
+  tap->was_pressed = pressed;
+  return fired;
+}
+
+static void spinner(struct ProjectFrame *f, int x, int y) {
+  static const int8_t offset[8][2] = {
+    {0, -9}, {6, -6}, {9, 0}, {6, 6}, {0, 9}, {-6, 6}, {-9, 0}, {-6, -6}
+  };
+  const int head = (f->frame_ms / 110) % 8;
+  for (int i = 0; i < 8; ++i) {
+    const int age = (head + 8 - i) % 8;
+    f->circle(f->canvas, x + offset[i][0], y + offset[i][1], age == 0 ? 2 : 1,
+              age <= 2 ? f->accent : f->muted);
+  }
+}
 
 int app_main(int argc, char **argv) {
   if (argc != 1) return -1;
@@ -54,39 +90,36 @@ int app_main(int argc, char **argv) {
     f->radio_start(stations[station].url);
   }
 
-  // A tap (release before kTapMaxMs) changes station; anything held longer is the board's own
-  // volume ramp instead (see Board::RampRadioVolume in board.cpp — kept in step with this value),
-  // so it must not also advance the station once released. button_held_ms resets to 0 the instant
-  // the button is up, so the peak while it was still down has to be tracked across frames.
-  enum { kTapMaxMs = 350 };
-  static int up_was_pressed = 0, down_was_pressed = 0;
-  static uint32_t up_peak_ms = 0, down_peak_ms = 0;
+  // Board::OnClick handles one tap as volume; the second release selects a station.
+  // A hold is Board::RampRadioVolume, and must never also change stations on release.
+  static struct TapState up_tap = {0}, down_tap = {0};
+  static int combo_blocked = 0;
+  static uint32_t last_frame_ms = 0;
+  if (last_frame_ms && f->frame_ms - last_frame_ms > 300) {
+    up_tap.was_pressed = down_tap.was_pressed = 0;
+    up_tap.last_release_ms = down_tap.last_release_ms = 0;
+  }
+  last_frame_ms = f->frame_ms;
   const int up_pressed = (f->buttons & 2) != 0;
   const int down_pressed = (f->buttons & 4) != 0;
-  if (up_pressed) {
-    if (f->button_held_ms[1] > up_peak_ms) up_peak_ms = f->button_held_ms[1];
+  if (up_pressed && down_pressed) combo_blocked = 1;
+  if (combo_blocked) {
+    up_tap.was_pressed = down_tap.was_pressed = 0;
+    up_tap.last_release_ms = down_tap.last_release_ms = 0;
+    if (!up_pressed && !down_pressed) combo_blocked = 0;
   } else {
-    if (up_was_pressed && up_peak_ms > 0 && up_peak_ms < kTapMaxMs) {
-      station = (station + 1) % STATION_COUNT;
+    const int next = double_tap(&up_tap, up_pressed, f->button_held_ms[1], f->frame_ms);
+    const int previous = double_tap(&down_tap, down_pressed, f->button_held_ms[2], f->frame_ms);
+    if (next || previous) {
+      station = (station + (next ? 1 : (int)STATION_COUNT - 1)) % STATION_COUNT;
       f->radio_start(stations[station].url);
     }
-    up_peak_ms = 0;
   }
-  if (down_pressed) {
-    if (f->button_held_ms[2] > down_peak_ms) down_peak_ms = f->button_held_ms[2];
-  } else {
-    if (down_was_pressed && down_peak_ms > 0 && down_peak_ms < kTapMaxMs) {
-      station = (station + STATION_COUNT - 1) % STATION_COUNT;
-      f->radio_start(stations[station].url);
-    }
-    down_peak_ms = 0;
-  }
-  up_was_pressed = up_pressed;
-  down_was_pressed = down_pressed;
 
-  char status[40], header[24], bottom[32];
+  char status[40], header[24], info[32];
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
+  const int reconnecting = state == 4 && same(status, "Reconnecting");
   const int center = f->width / 2;
 
   // "RADIO 3/11": station position is otherwise invisible while tapping through stations blind,
@@ -99,23 +132,31 @@ int app_main(int argc, char **argv) {
   append_int(header, &hp, sizeof(header), (int)STATION_COUNT);
   f->label(f->canvas, 8, header, f->muted, 1);
   f->line(f->canvas, 8, 23, f->width - 8, 23, 1, f->accent);
-  f->label(f->canvas, 42, stations[station].name, f->text, 2);
-  f->label(f->canvas, 64, status, state == 4 ? 0xf800 : f->accent, 1);
+  const int name_scale = f->text_width(stations[station].name, 2) <= f->width - 8 ? 2 : 1;
+  f->label(f->canvas, name_scale == 2 ? 42 : 47, stations[station].name, f->text, name_scale);
+  f->label(f->canvas, 62, status, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
   if (state == 3) {
     for (int i = 0; i < 7; ++i) {
       int bar = 4 + ((f->frame_ms / 170 + i * 7) % (i + 5)) * 2;
-      f->fill_rect(f->canvas, center - 25 + i * 8, 90 - bar, 4, bar, f->accent);
+      f->fill_rect(f->canvas, center - 25 + i * 8, 86 - bar, 4, bar, f->accent);
     }
+  } else if (state == 1 || state == 2 || reconnecting) {
+    spinner(f, center, 80);
+  } else if (state == 4) {
+    f->ring(f->canvas, center, 80, 9, 2, 0xf800);
+    f->label(f->canvas, 75, "!", 0xf800, 1);
   }
-  // The +/- hint used to disappear the moment playback started (bitrate took its place); keep a
-  // short reminder alongside the bitrate instead of losing it once someone's a few days in.
-  int bp = 0;
+  int ip = 0;
+  append(info, &ip, sizeof(info), "VOL ");
+  append_int(info, &ip, sizeof(info), f->volume);
+  append(info, &ip, sizeof(info), "%");
   if (kbps > 0) {
-    append_int(bottom, &bp, sizeof(bottom), kbps);
-    append(bottom, &bp, sizeof(bottom), "k - +/-");
-  } else {
-    append(bottom, &bp, sizeof(bottom), "Tap +/-: station");
+    append(info, &ip, sizeof(info), "  ");
+    append_int(info, &ip, sizeof(info), kbps);
+    append(info, &ip, sizeof(info), "k");
   }
-  f->label(f->canvas, f->height - 9, bottom, f->muted, 1);
+  f->label(f->canvas, f->height - 22, info, f->text, 1);
+  f->label(f->canvas, f->height - 9,
+           (f->frame_ms / 4000) % 2 ? "Hold +/-: volume" : "2x +/-: station", f->muted, 1);
   return 0;
 }

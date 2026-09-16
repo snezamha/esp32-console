@@ -140,13 +140,10 @@ void Board::InitializeButtons() {
       if (menu_key_handler_) menu_key_handler_(MenuKey::Up);
       return;
     }
-    // While the radio project is active, a tap changes station instead (it reads the same click
-    // as a quick press-release in Loop()'s RampRadioVolume() call below) and a hold ramps volume,
-    // so this ordinary step-by-10 behavior is reserved for every other screen.
-    if (RadioStream::Get().Active()) return;
-    const int volume = std::min(audio_codec_->output_volume() + 10, 100);
+    const bool radio = RadioStream::Get().Active();
+    const int volume = std::min(audio_codec_->output_volume() + (radio ? 5 : 10), 100);
     audio_codec_->SetOutputVolume(volume);
-    display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
+    if (!radio) display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
     Serial.printf("{\"event\":\"volume\",\"volume\":%d}\n", volume);
   });
 
@@ -162,10 +159,10 @@ void Board::InitializeButtons() {
       if (menu_key_handler_) menu_key_handler_(MenuKey::Down);
       return;
     }
-    if (RadioStream::Get().Active()) return;  // See the matching comment on volume_up_button_.
-    const int volume = std::max(audio_codec_->output_volume() - 10, 0);
+    const bool radio = RadioStream::Get().Active();
+    const int volume = std::max(audio_codec_->output_volume() - (radio ? 5 : 10), 0);
     audio_codec_->SetOutputVolume(volume);
-    display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
+    if (!radio) display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
     Serial.printf("{\"event\":\"volume\",\"volume\":%d}\n", volume);
   });
 
@@ -178,6 +175,11 @@ void Board::InitializeButtons() {
 }
 
 void Board::Loop() {
+  // Radio needs a slightly wider double-tap window. Keep the normal response time in menus.
+  const uint16_t click_window = !menu_open_ && RadioStream::Get().Active()
+                                    ? 260 : Button::kDefaultShortPressMs;
+  volume_up_button_.SetShortPressTime(click_window);
+  volume_down_button_.SetShortPressTime(click_window);
   const bool was[3] = {pwr_button_.IsPressed(), volume_up_button_.IsPressed(),
                        volume_down_button_.IsPressed()};
   pwr_button_.Tick();
@@ -213,10 +215,9 @@ void Board::Loop() {
     volume_down_button_.Cancel();
   }
 
-  // While the radio project is active, a quick tap changes station (the project reads it off
-  // button_held_ms itself) and a hold past kRadioRampStartMs ramps volume continuously here,
-  // rather than the ordinary click-to-step-by-10 / 1.5 s-long-press-to-extreme behavior.
-  if (!menu_open_ && RadioStream::Get().Active()) {
+  // In radio, a tap steps volume by 5%, a double tap selects a station in the project,
+  // and a hold ramps volume continuously.
+  if (!menu_open_ && !volume_combo_latched_ && RadioStream::Get().Active()) {
     RampRadioVolume(volume_up_button_, 1, ramp_up_next_ms_);
     RampRadioVolume(volume_down_button_, -1, ramp_down_next_ms_);
   } else {
@@ -230,23 +231,21 @@ void Board::Loop() {
 }
 
 void Board::RampRadioVolume(Button& button, int direction, uint32_t& next_at_ms) {
-  // Below kRadioRampStartMs a release still counts as the project's tap-to-change-station (see
-  // main.c in the radio project), so nothing must happen here yet or the two would fight over
-  // the same press. kStepPercent is gentler than the ordinary tap's +/-10 jump: a press held for
-  // a couple of seconds should sweep the range, not overshoot it in three ticks.
+  // A hold cancels the pending click, so releasing it cannot add another 5% step.
   constexpr uint32_t kRadioRampStartMs = 350;
   constexpr uint32_t kStepIntervalMs = 120;
   constexpr int kStepPercent = 4;
-  if (!button.IsPressed() || button.HeldMs() < kRadioRampStartMs) {
+  if (!button.IsPressed() || button.HeldMs() < kRadioRampStartMs ||
+      (button.IsCancelled() && next_at_ms == 0)) {
     next_at_ms = 0;
     return;
   }
+  button.Cancel();
   const uint32_t now = millis();
   if (next_at_ms != 0 && now < next_at_ms) return;
   next_at_ms = now + kStepIntervalMs;
   const int volume = std::clamp(audio_codec_->output_volume() + direction * kStepPercent, 0, 100);
   audio_codec_->SetOutputVolume(volume);
-  display_->ShowNotification(std::string(Lang::Strings::VOLUME) + std::to_string(volume / 10));
   Serial.printf("{\"event\":\"volume\",\"volume\":%d}\n", volume);
 }
 

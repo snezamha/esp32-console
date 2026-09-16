@@ -58,13 +58,13 @@
     {
       "id": "radio",
       "name": "Internet radio",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "abi": 5,
-      "description": "Stream live MP3 radio, including Persian, German and BBC stations. Tap + or − to change stations; hold to adjust volume.",
+      "description": "Stream live MP3 radio, including Persian, German and BBC stations. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
       "category": "Music",
       "icon": "radio",
       "accent": "#f97316",
-      "minimumFirmware": "1.1.15",
+      "minimumFirmware": "1.1.20",
       "capabilities": [
         "internet",
         "speaker"
@@ -124,10 +124,10 @@
         }
       ],
       "board": "esp32-s3-lcd-0.85",
-      "path": "/projects/esp32-s3-lcd-0.85/radio/1.2.2.elf",
-      "size": 4384,
-      "md5": "e03a9ed7615700559b8031646e359aa0",
-      "sha256": "d6c914aea0aa5bf2e7cca78e650f1828f48f0696cea0cbc9b92dde9dd356f904"
+      "path": "/projects/esp32-s3-lcd-0.85/radio/1.2.3.elf",
+      "size": 4996,
+      "md5": "124c43dd293525206dc49249c2063fee",
+      "sha256": "7bdf237d094026211f655b2d8655739af86ed129d54f7a6f6736b99b31df4d59"
     },
     {
       "id": "weather",
