@@ -138,7 +138,16 @@ export async function POST(request: Request) {
     }
     if (settings.project === "radio") {
       const config = await projectSettingsForBoard(report.token, "radio");
-      if (config && typeof config.station === "string") lines.push(`project_data=${encodeURIComponent(config.station)}`);
+      if (config && typeof config.station === "string") {
+        // data[0] is the starting station id; data[1] is up to 3 user-supplied stream URLs,
+        // pipe-joined (firmware only splits the payload on the first "|", so the project itself
+        // splits data[1] further). Empty slots stay empty strings, not omitted, so the firmware
+        // can tell "second custom URL unset" from "second custom URL is the third one shifted up".
+        const custom = ["custom1", "custom2", "custom3"]
+          .map((key) => (typeof config[key] === "string" ? (config[key] as string) : ""))
+          .join("|");
+        lines.push(`project_data=${encodeURIComponent(`${config.station}|${custom}`)}`);
+      }
     }
   }
   return reply(lines);

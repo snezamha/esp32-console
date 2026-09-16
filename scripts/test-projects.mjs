@@ -24,10 +24,14 @@ const clockConfig = projectConfig.sanitizeProjectConfig("analog-clock", { timezo
 assert.equal(clockConfig.timezone, "Europe/Berlin");
 assert.equal(clockConfig.style, "minimal");
 assert.equal(clockConfig.seconds, true);
-const radioConfig = projectConfig.sanitizeProjectConfig("radio", { station: "drone" });
-assert.equal(radioConfig.station, "drone");
+const radioConfig = projectConfig.sanitizeProjectConfig("radio", { station: "bbc" });
+assert.equal(radioConfig.station, "bbc");
 assert.equal(projectConfig.sanitizeProjectConfig("radio", { station: "farda" }).station, "farda");
-assert.equal(projectConfig.sanitizeProjectConfig("radio", { station: "missing" }).station, "paradise");
+assert.equal(projectConfig.sanitizeProjectConfig("radio", { station: "missing" }).station, "farda");
+const radioCustom = projectConfig.sanitizeProjectConfig("radio", { custom1: "  https://example.com/stream.mp3  ", custom2: "x".repeat(200) });
+assert.equal(radioCustom.custom1, "https://example.com/stream.mp3", "Text settings must be trimmed");
+assert.equal(radioCustom.custom2.length, 120, "Text settings must be capped at their manifest maxLength");
+assert.equal(projectConfig.sanitizeProjectConfig("radio", { custom3: 5 }).custom3, "", "Non-string values must not overwrite a text setting's default");
 assert.throws(() => projectConfig.sanitizeProjectConfig("missing", {}), /Unknown project/);
 delete globalThis.__projectConfigTest;
 for (const project of manifest.projects) {

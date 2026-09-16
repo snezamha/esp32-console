@@ -17,6 +17,7 @@ export function ProjectSettingsForm({ project, value, disabled, onChange }: { pr
       if (setting.type === "timezone") return <TimezoneSetting key={setting.key} label={setting.label} value={String(current)} onChange={(next) => set(setting.key, next)} />;
       if (setting.type === "select") return <label key={setting.key} className="block space-y-1 text-xs">{setting.label}<select value={String(current)} onChange={(event) => set(setting.key, event.target.value)} className={inputClass}>{setting.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
       if (setting.type === "number") return <Slider key={setting.key} label={setting.label} value={Number(current)} min={setting.min ?? 0} max={setting.max ?? 100} step={setting.step ?? 1} onChange={(next) => set(setting.key, next)} />;
+      if (setting.type === "text") return <label key={setting.key} className="block space-y-1 text-xs">{setting.label}<input type="text" value={String(current ?? "")} maxLength={setting.maxLength ?? 256} placeholder={setting.placeholder} onChange={(event) => set(setting.key, event.target.value)} className={inputClass} /></label>;
       return null;
     })}
   </fieldset>;

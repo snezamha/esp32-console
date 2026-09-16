@@ -58,9 +58,9 @@
     {
       "id": "radio",
       "name": "Internet radio",
-      "version": "1.2.3",
+      "version": "1.3.0",
       "abi": 5,
-      "description": "Stream live MP3 radio, including Persian, German and BBC stations. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
+      "description": "Stream live MP3 radio: Persian, German and BBC stations, plus up to 3 of your own. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
       "category": "Music",
       "icon": "radio",
       "accent": "#f97316",
@@ -74,31 +74,11 @@
           "key": "station",
           "type": "select",
           "label": "Starting station",
-          "default": "paradise",
+          "default": "farda",
           "options": [
-            {
-              "value": "paradise",
-              "label": "Radio Paradise"
-            },
-            {
-              "value": "groove",
-              "label": "Groove Salad"
-            },
-            {
-              "value": "agent",
-              "label": "Secret Agent"
-            },
-            {
-              "value": "drone",
-              "label": "Drone Zone"
-            },
             {
               "value": "farda",
               "label": "Radio Farda · فارسی"
-            },
-            {
-              "value": "yar",
-              "label": "Radio Yar · فارسی"
             },
             {
               "value": "navahang",
@@ -121,13 +101,37 @@
               "label": "1LIVE · Deutsch"
             }
           ]
+        },
+        {
+          "key": "custom1",
+          "type": "text",
+          "label": "Custom station 1 (stream URL)",
+          "default": "",
+          "maxLength": 120,
+          "placeholder": "https://example.com/stream.mp3"
+        },
+        {
+          "key": "custom2",
+          "type": "text",
+          "label": "Custom station 2 (stream URL)",
+          "default": "",
+          "maxLength": 120,
+          "placeholder": "https://example.com/stream.mp3"
+        },
+        {
+          "key": "custom3",
+          "type": "text",
+          "label": "Custom station 3 (stream URL)",
+          "default": "",
+          "maxLength": 120,
+          "placeholder": "https://example.com/stream.mp3"
         }
       ],
       "board": "esp32-s3-lcd-0.85",
-      "path": "/projects/esp32-s3-lcd-0.85/radio/1.2.3.elf",
-      "size": 4996,
-      "md5": "124c43dd293525206dc49249c2063fee",
-      "sha256": "7bdf237d094026211f655b2d8655739af86ed129d54f7a6f6736b99b31df4d59"
+      "path": "/projects/esp32-s3-lcd-0.85/radio/1.3.0.elf",
+      "size": 5060,
+      "md5": "64b24fb2e34de03063d7bab38f45f604",
+      "sha256": "67931b9015b571f9232a775e34bfe7f83edd975224af3459fd447e7eb1fd4df2"
     },
     {
       "id": "weather",

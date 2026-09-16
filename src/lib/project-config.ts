@@ -7,13 +7,16 @@ export type ProjectConfig = Record<string, ProjectSettingValue>;
 export type ProjectConfigs = Record<string, ProjectConfig>;
 export type ProjectSettingDefinition = {
   key: string;
-  type: "boolean" | "select" | "timezone" | "number" | "location";
+  type: "boolean" | "select" | "timezone" | "number" | "location" | "text";
   label: string;
   default: ProjectSettingValue;
   options?: { value: string; label: string }[];
   min?: number;
   max?: number;
   step?: number;
+  /** "text" only: trimmed and truncated to this length; also keeps the on-device data payload bounded. */
+  maxLength?: number;
+  placeholder?: string;
 };
 // Declared rather than inferred from the manifest JSON: inference breaks as soon as catalog entries
 // differ in shape (for example one project with SD card assets and one without).
@@ -83,6 +86,8 @@ export function sanitizeProjectConfig(projectId: string, input: unknown, base?: 
     } else if (setting.type === "number") {
       const number = Number(value);
       if (Number.isFinite(number)) output[setting.key] = Math.min(setting.max ?? number, Math.max(setting.min ?? number, number));
+    } else if (setting.type === "text") {
+      if (typeof value === "string") output[setting.key] = value.trim().slice(0, setting.maxLength ?? 256);
     } else if (setting.type === "location" && value && typeof value === "object" && !Array.isArray(value)) {
       const location = value as Record<string, unknown>;
       const latitude = Number(location.latitude), longitude = Number(location.longitude);
