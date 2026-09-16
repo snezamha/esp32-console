@@ -100,9 +100,12 @@ class PowerManager {
   static constexpr float kDividerRatio = 3.0f;
 
   struct CurvePoint { int millivolts, percent; };
+  // Top anchor measured on this board, not the textbook 4200mV: its charge IC terminates around
+  // 4.08V at rest (confirmed with the charger unplugged, no load), so 100% was previously
+  // unreachable and every reading capped near 92%.
   static constexpr CurvePoint kDischargeCurve[] = {
       {3300, 0}, {3500, 5}, {3600, 10}, {3680, 20}, {3740, 30}, {3770, 40},
-      {3790, 50}, {3820, 60}, {3870, 70}, {3950, 80}, {4050, 90}, {4200, 100},
+      {3790, 50}, {3820, 60}, {3870, 70}, {3950, 80}, {4050, 90}, {4080, 100},
   };
 
   static int VoltageToPercent(float millivolts) {
