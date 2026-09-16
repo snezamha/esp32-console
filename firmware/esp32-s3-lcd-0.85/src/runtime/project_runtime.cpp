@@ -25,6 +25,7 @@
 #include "../hw_test.h"
 #include "../services/network.h"
 #include "../services/sd_files.h"
+#include "../services/radio_stream.h"
 extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
 namespace {
@@ -240,6 +241,7 @@ void CopyText(char* out, uint32_t capacity, const std::string& value) {
 }
 
 void ResetProjectIo(const std::string& id = "") {
+  RadioStream::Get().Stop();
   if (g_led_owned) {
     Board::GetInstance().ApplyLed();
     g_led_owned = false;
@@ -623,7 +625,15 @@ void ProjectRuntime::Begin() {
     const auto saved = Parts(active);
     const bool has_project = saved.size() > 1 && saved[1] != "none";
     pinMode(VOLUME_UP_BUTTON_GPIO, INPUT_PULLUP);
-    const bool manual_safe_mode = digitalRead(VOLUME_UP_BUTTON_GPIO) == LOW;
+    // Require an intentional hold through boot. A brief Vol+ press coinciding
+    // with a reset must not disable the saved project.
+    bool manual_safe_mode = digitalRead(VOLUME_UP_BUTTON_GPIO) == LOW;
+    if (manual_safe_mode) {
+      for (int i = 0; i < 12; ++i) {
+        delay(100);
+        if (digitalRead(VOLUME_UP_BUTTON_GPIO) != LOW) { manual_safe_mode = false; break; }
+      }
+    }
     int crashes = s.GetInt("crashes", 0);
     if (has_project && AbnormalReset(esp_reset_reason())) crashes++;
     else if (!AbnormalReset(esp_reset_reason())) crashes = 0;
@@ -1035,6 +1045,9 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
   frame.wifi_scan_start = WifiScanStart; frame.wifi_scan_count = WifiScanCount; frame.wifi_scan_result = WifiScanResult;
   frame.ble_scan_start = BleScanStart; frame.ble_scan_count = BleScanCount; frame.ble_scan_result = BleScanResult;
   frame.http_get = HttpGet; frame.http_result = HttpResult;
+  frame.radio_start = [](const char* url) { return RadioStream::Get().Start(url); };
+  frame.radio_stop = []() { RadioStream::Get().Stop(); };
+  frame.radio_status = [](char* text, uint32_t capacity, int* bitrate) { return RadioStream::Get().Status(text, capacity, bitrate); };
   const auto saved = c.GetClip(); c.IntersectClip(x,y,w,h);
   char* argv[] = {reinterpret_cast<char*>(&frame)};
   const int result = esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);

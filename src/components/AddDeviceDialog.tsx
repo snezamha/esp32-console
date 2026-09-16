@@ -146,13 +146,13 @@ export function AddDeviceDialog({
 
 /** Points a board at this console over USB when it was built without (or with another) console address. */
 function NoCodeHelp() {
-  const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const local = /^https?:\/\/(localhost|127\.|\[::1\])/.test(origin);
 
   const pointBoard = async () => {
+    if (local) return;
     setBusy(true);
     setStatus(null);
     try {
@@ -160,7 +160,12 @@ function NoCodeHelp() {
       if (!api) throw new Error("This browser has no Web Serial or WebUSB support.");
       const port = (await findKnownPort(api)) ?? (await api.requestPort());
       const reply = await sendSerialCommand(port, `console ${origin}`);
-      const ok = reply.some((line) => line.includes('"console"'));
+      const ok = reply.some((line) => {
+        try {
+          const value = JSON.parse(line) as { console?: { server?: string } };
+          return value.console?.server === origin;
+        } catch { return false; }
+      });
       setStatus(ok ? "Done. The board shows its code once it is online." : "No reply from the board. Is the ESP32 Console firmware running?");
     } catch (err) {
       if (err instanceof DOMException && err.name === "NotFoundError") return;
@@ -170,15 +175,9 @@ function NoCodeHelp() {
     }
   };
 
-  if (!open) {
-    return (
-      <Button onClick={() => setOpen(true)} className="text-xs font-medium text-zinc-500 underline underline-offset-2">
-        The device shows no code?
-      </Button>
-    );
-  }
   return (
     <div className="space-y-2 rounded-xl bg-zinc-50 p-3 text-xs text-zinc-600 dark:bg-zinc-800/60 dark:text-zinc-400">
+      <p className="font-semibold text-zinc-800 dark:text-zinc-200">No code on the board? Connect it over USB.</p>
       <ol className="list-decimal space-y-1 pl-4">
         <li>Flash the latest firmware from the Flash firmware tab.</li>
         <li>Connect the board to Wi-Fi (it opens a setup network on first start).</li>
@@ -191,14 +190,13 @@ function NoCodeHelp() {
       {local && (
         <p className="text-amber-700 dark:text-amber-400">
           The board cannot reach localhost. Open this console through your computer’s network address (for example
-          http://192.168.1.10:3000) first.
+          http://192.168.1.10:3000) or a deployed HTTPS address, then send that address over USB.
         </p>
       )}
-      <Button onClick={pointBoard} disabled={busy} className={secondaryButton + " h-9 w-full bg-white dark:bg-zinc-900"}>
+      <Button onClick={pointBoard} disabled={busy || local} className={secondaryButton + " h-9 w-full bg-white dark:bg-zinc-900"}>
         {busy ? "Sending…" : "Send address over USB"}
       </Button>
       {status && <p>{status}</p>}
     </div>
   );
 }
-

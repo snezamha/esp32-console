@@ -1,0 +1,34 @@
+#ifndef _BOARD_CONFIG_H_
+#define _BOARD_CONFIG_H_
+
+// Waveshare ESP32-S3-Touch-AMOLED-2.06 · ESP32-S3R8 · 32MB flash · 8MB PSRAM
+// Panel: CO5300 AMOLED (QSPI) + FT3168 touch, driven by GFX Library for Arduino + LVGL.
+
+#include <driver/gpio.h>
+
+// Selects XPowersPMU = XPowersAXP2101 in XPowersLib.h.
+#define XPOWERS_CHIP_AXP2101
+
+#define BOOT_BUTTON_GPIO GPIO_NUM_0
+
+// Shared I2C bus: AXP2101 PMIC + FT3168 touch.
+#define IIC_SDA_PIN GPIO_NUM_15
+#define IIC_SCL_PIN GPIO_NUM_14
+#define PMIC_I2C_ADDR 0x34
+
+// CO5300 AMOLED panel, QSPI.
+#define DISPLAY_CS_PIN GPIO_NUM_12
+#define DISPLAY_CLK_PIN GPIO_NUM_11
+#define DISPLAY_D0_PIN GPIO_NUM_4
+#define DISPLAY_D1_PIN GPIO_NUM_5
+#define DISPLAY_D2_PIN GPIO_NUM_6
+#define DISPLAY_D3_PIN GPIO_NUM_7
+#define DISPLAY_RST_PIN GPIO_NUM_8
+
+#define DISPLAY_WIDTH 410
+#define DISPLAY_HEIGHT 502
+
+#define TOUCH_INT_PIN GPIO_NUM_38
+#define TOUCH_RST_PIN GPIO_NUM_9
+
+#endif  // _BOARD_CONFIG_H_

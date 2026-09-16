@@ -3,13 +3,14 @@
 import { Button } from "@headlessui/react";
 import { useState } from "react";
 import { LedRingDesigner } from "@/components/LedRingDesigner";
-import { SdFileManager, formatBytes, runFileJob } from "@/components/SdFileManager";
+import { JobProgress, SdFileManager, formatBytes, runFileJob, type JobStage } from "@/components/SdFileManager";
 import { Select } from "@/components/Select";
 import { ConfirmDialog, ErrorText, Group, Sheet, Slider, Toggle, ToastBanner, accentButton, inputClass, secondaryButton, useToast } from "@/components/ui";
 import { api, boardName, compareVersions, deviceName, duration } from "@/lib/device-client";
 import { LED_COLORS, POWER_OFF_OPTIONS, SLEEP_OPTIONS, TIME_ZONES, type DeviceSettings } from "@/lib/device-settings";
 import { SD_FILES_FIRMWARE, type PublicDevice } from "@/lib/device-types";
 import { errorMessage } from "@/lib/esp";
+import { connectSerialLink } from "@/lib/serial-link";
 
 export function ConfigureDialog({
   device,
@@ -25,19 +26,34 @@ export function ConfigureDialog({
   const [files, setFiles] = useState(false);
   const [confirmFormat, setConfirmFormat] = useState(false);
   const [formatting, setFormatting] = useState(false);
+  const [formatStage, setFormatStage] = useState<JobStage | null>(null);
   const [toast, setToast] = useToast();
   const modern = compareVersions(device.firmware, SD_FILES_FIRMWARE) >= 0;
   const format = async () => {
     setConfirmFormat(false);
     setFormatting(true);
+    setFormatStage(null);
     setError(null);
     try {
-      await runFileJob(device, { type: "sd_format" });
+      // A board plugged into this computer formats over USB, without the console round trips.
+      const usb = await connectSerialLink(device.mac, false).catch(() => null);
+      if (usb) {
+        const startedAt = Date.now();
+        setFormatStage({ type: "sd_format", stage: "usb", progress: null, startedAt });
+        try {
+          await usb.format((progress) => setFormatStage({ type: "sd_format", stage: "usb", progress, startedAt }));
+        } finally {
+          await usb.close();
+        }
+      } else {
+        await runFileJob(device, { type: "sd_format" }, setFormatStage);
+      }
       setToast("SD card formatted");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setFormatting(false);
+      setFormatStage(null);
     }
   };
   const set = <K extends keyof DeviceSettings>(key: K, value: DeviceSettings[K]) =>
@@ -168,12 +184,13 @@ export function ConfigureDialog({
               <div className="flex flex-wrap gap-2">
                 <Button onClick={() => setFiles(true)} disabled={formatting} className={secondaryButton + " h-10 px-4"}>Open file manager</Button>
                 <Button onClick={() => setConfirmFormat(true)} disabled={formatting} className="h-10 rounded-xl border border-red-200 px-4 text-sm font-medium text-red-600 data-disabled:opacity-50 data-hover:bg-red-50 dark:border-red-900 dark:data-hover:bg-red-950">
-                  {formatting ? "Formatting… waiting for the board" : "Format card"}
+                  {formatting ? "Formatting…" : "Format card"}
                 </Button>
               </div>
             ) : (
               <p className="text-xs text-zinc-500">Update the base firmware to v{SD_FILES_FIRMWARE} to browse and format the card.</p>
             )}
+            {modern && formatting && <JobProgress label="Formatting the SD card" stage={formatStage} />}
           </Group>
 
           <Group title="Connectivity & time">

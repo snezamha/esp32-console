@@ -24,7 +24,8 @@ for (const dir of readdirSync(join(root, "projects"), {withFileTypes: true})) {
   const meta = JSON.parse(readFileSync(join(source, "project.json"), "utf8"));
   const assetSource = join(source, "assets");
   const hasAssets = existsSync(assetSource);
-  const abi = hasAssets ? 3 : 2;
+  const abi = meta.abi ?? (hasAssets ? 3 : 2);
+  if (!Number.isInteger(abi) || abi < 2 || abi > 5 || (hasAssets && abi < 3)) throw new Error(`${meta.id}: unsupported project ABI ${abi}.`);
   const destination = join(root, "public/projects", board, meta.id);
   mkdirSync(destination, {recursive: true});
   const binary = join(destination, `${meta.version}.elf`);

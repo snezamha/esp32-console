@@ -115,7 +115,7 @@ function StatusPanel({ device }: { device: PublicDevice }) {
   return (
     <div className="space-y-4">
       <dl className="grid grid-cols-2 gap-2 text-sm">
-        <Info label="Battery" value={device.battery >= 0 ? `${device.battery}%${device.charging ? " · charging" : ""}` : "—"} />
+        <Info label="Battery" value={device.battery >= 0 ? `${device.battery}%${device.batteryMv > 0 ? ` · ${(device.batteryMv / 1000).toFixed(3)} V` : ""}${device.charging ? " · charging" : ""}` : "—"} />
         <Info label="Signal" value={signalLabel(device.rssi)} />
         <Info label="Uptime" value={device.uptime ? uptime(device.uptime) : "—"} />
         <Info label="Free memory" value={device.heap ? `${Math.round(device.heap / 1024)} KB` : "—"} />
@@ -135,6 +135,7 @@ function StatusPanel({ device }: { device: PublicDevice }) {
       ) : (
         <div className="space-y-3">
           <Sparkline label="Battery" unit="%" samples={recent} pick={(s) => (s.battery >= 0 ? s.battery : null)} min={0} max={100} />
+          <Sparkline label="Battery voltage" unit=" V" samples={recent} pick={(s) => (s.batteryMv ? s.batteryMv / 1000 : null)} />
           <Sparkline label="Signal" unit=" dBm" samples={recent} pick={(s) => s.rssi || null} min={-95} max={-30} />
           <Sparkline label="Free memory" unit=" KB" samples={recent} pick={(s) => (s.heap ? Math.round(s.heap / 1024) : null)} />
         </div>

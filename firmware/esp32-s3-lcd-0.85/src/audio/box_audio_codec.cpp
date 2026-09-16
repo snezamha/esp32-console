@@ -11,6 +11,7 @@ BoxAudioCodec::BoxAudioCodec(i2c_master_bus_handle_t i2c_bus, int sample_rate, g
                              gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr)
     : i2c_bus_(i2c_bus),
       sample_rate_(sample_rate),
+      default_sample_rate_(sample_rate),
       mclk_(mclk),
       bclk_(bclk),
       ws_(ws),
@@ -94,6 +95,21 @@ void BoxAudioCodec::SetInputGain(float db) {
 
 void BoxAudioCodec::EnableOutput(bool enable) {
   if (pa_pin_ != GPIO_NUM_NC) gpio_set_level(pa_pin_, enable ? 1 : 0);
+}
+
+bool BoxAudioCodec::SetSampleRate(int sample_rate) {
+  if (!started_ || !tx_ || !rx_ || sample_rate < 8000 || sample_rate > 48000) return false;
+  if (sample_rate == sample_rate_) return true;
+  EnableOutput(false);
+  if (i2s_channel_disable(tx_) != ESP_OK || i2s_channel_disable(rx_) != ESP_OK) return false;
+  i2s_std_clk_config_t clock = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(sample_rate));
+  clock.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+  const bool ok = i2s_channel_reconfig_std_clock(tx_, &clock) == ESP_OK &&
+                  i2s_channel_reconfig_std_clock(rx_, &clock) == ESP_OK;
+  i2s_channel_enable(rx_);
+  i2s_channel_enable(tx_);
+  if (ok) sample_rate_ = sample_rate;
+  return ok;
 }
 
 int BoxAudioCodec::Write(const int16_t* samples, int frames, int timeout_ms) {

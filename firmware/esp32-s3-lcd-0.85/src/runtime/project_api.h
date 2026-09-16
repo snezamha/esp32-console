@@ -3,12 +3,13 @@
 
 // Stable C ABI for independently compiled Xtensa ELF display modules.
 // Coordinates are relative to the content area. The host clips every primitive.
-// ABI 3 appends SD card asset access. ABI 4 appends controlled board I/O. Fields are only
+// ABI 3 appends SD card asset access. ABI 4 appends controlled board I/O. ABI 5 appends
+// background MP3 radio playback. Fields are only
 // appended, and the host sets `abi` to the version the module was built for, so older modules
 // keep working unchanged.
 // `pnpm projects:build` defines DISPLAY_PROJECT_ABI=2 for projects without SD card assets.
 #ifndef DISPLAY_PROJECT_ABI
-#define DISPLAY_PROJECT_ABI 4
+#define DISPLAY_PROJECT_ABI 5
 #endif
 #define DISPLAY_PROJECT_MIN_ABI 2
 #ifdef __cplusplus
@@ -86,6 +87,11 @@ struct ProjectFrame {
   int (*http_get)(const char *url);
   // -2 running, -1 failed, >=0 copied response bytes. `status` receives the HTTP status/error.
   int32_t (*http_result)(void *buffer, uint32_t capacity, int *status);
+  // ABI 5: direct MP3 HTTP(S) streams, played by the host in a background task.
+  int (*radio_start)(const char *url);
+  void (*radio_stop)(void);
+  // 0 stopped, 1 connecting, 2 buffering, 3 playing, 4 error.
+  int (*radio_status)(char *text, uint32_t capacity, int *bitrate_kbps);
 };
 #ifdef __cplusplus
 }

@@ -18,9 +18,10 @@ const OTA_STATES = ["downloading", "done", "failed"];
  *   secret      random hex generated at boot (identifies the pairing while unlinked)
  *   code        pairing code the board currently shows
  *   token       device token once linked
- *   mac, board, fw, ip, rssi, battery, charging, heap, uptime, rev
+ *   mac, board, fw, ip, rssi, battery, battery_mv, charging, heap, uptime, rev
  *   s.<key>     current value of each setting in DeviceSettings
  *   sd          SD card: <mounted 0|1>|<total bytes>|<free bytes>
+ *   sd.job      running SD operation: <command id>|<done>|<total> (bytes, or sectors for a format)
  *   t.<key>     hardware check result: <status>|<detail>
  *   ota         <state>|<progress>|<error>
  *   wifi1, wifi2  saved network names
@@ -91,6 +92,7 @@ export async function POST(request: Request) {
     ip: field("ip", 45),
     rssi: int("rssi", 0),
     battery: int("battery", -1),
+    batteryMv: Math.max(0, Math.min(5000, int("battery_mv", 0))),
     charging: field("charging") === "1",
     heap: int("heap", 0),
     uptime: int("uptime", 0),
@@ -103,6 +105,7 @@ export async function POST(request: Request) {
     sdCard: sdCard(field("sd", 64)),
     projectStatus: projectId && phases.includes(projectPhase) ? { id: projectId, phase: projectPhase as ProjectPhase, progress: Math.min(100, Math.max(0, parseInt(projectProgress, 10) || 0)), bytes: Math.max(0, parseInt(projectBytes, 10) || 0), total: Math.max(0, parseInt(projectTotal, 10) || 0) } : null,
     projectLogs,
+    fileProgress: fileProgress(field("sd.job", 64)),
     resetReason: field("reset_reason"),
     tests,
     ota: OTA_STATES.includes(otaState)
@@ -133,11 +136,22 @@ export async function POST(request: Request) {
       const config = await projectSettingsForBoard(report.token, "weather");
       if (config) lines.push(`project_data=${encodeURIComponent(await weatherPayload(config, budget))}`);
     }
+    if (settings.project === "radio") {
+      const config = await projectSettingsForBoard(report.token, "radio");
+      if (config && typeof config.station === "string") lines.push(`project_data=${encodeURIComponent(config.station)}`);
+    }
   }
   return reply(lines);
 }
 
 /** `mounted|total bytes|free bytes`, sent by firmware with display ABI 3. */
+function fileProgress(value: string) {
+  const [id, done, total] = value.split("|");
+  if (!id || !/^[0-9a-f]{1,16}$/.test(id)) return null;
+  const count = (text: string) => Math.max(0, Number.parseInt(text, 10) || 0);
+  return { id, done: Math.min(count(done), count(total)), total: count(total) };
+}
+
 function sdCard(value: string) {
   const [mounted, total, free] = value.split("|");
   if (!value || !["0", "1"].includes(mounted)) return null;

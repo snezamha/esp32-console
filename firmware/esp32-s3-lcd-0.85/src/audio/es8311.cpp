@@ -68,7 +68,10 @@ bool Es8311::Init(int sample_rate) {
 void Es8311::SetVolume(int volume) {
   if (volume < 0) volume = 0;
   if (volume > 100) volume = 100;
-  dev_.WriteReg(REG32_DAC, volume == 0 ? 0 : (volume * 256 / 100) - 1);
+  // 0xBF is 0 dB. The previous 100% value (0xFF) applied +32 dB digital gain,
+  // overdriving the small speaker amplifier and, on battery, its supply.
+  // Keep the former 50% level close to its old value while capping at unity gain.
+  dev_.WriteReg(REG32_DAC, volume == 0 ? 0 : 63 + volume * 128 / 100);
 }
 
 void Es8311::SetMute(bool mute) { dev_.UpdateReg(REG31_DAC, 0x60, mute ? 0x60 : 0x00); }

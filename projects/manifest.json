@@ -56,6 +56,64 @@
       "sha256": "ee6c1de11a2af318cbd7e71e4a9c0837cbd26e3f1c73558203422d1eaa72364c"
     },
     {
+      "id": "radio",
+      "name": "Internet radio",
+      "version": "1.1.0",
+      "abi": 5,
+      "description": "Stream live MP3 radio, including Persian stations. Hold + or − to change stations; tap to adjust volume.",
+      "category": "Music",
+      "icon": "radio",
+      "accent": "#f97316",
+      "minimumFirmware": "1.1.12",
+      "capabilities": [
+        "internet",
+        "speaker"
+      ],
+      "settings": [
+        {
+          "key": "station",
+          "type": "select",
+          "label": "Starting station",
+          "default": "paradise",
+          "options": [
+            {
+              "value": "paradise",
+              "label": "Radio Paradise"
+            },
+            {
+              "value": "groove",
+              "label": "Groove Salad"
+            },
+            {
+              "value": "agent",
+              "label": "Secret Agent"
+            },
+            {
+              "value": "drone",
+              "label": "Drone Zone"
+            },
+            {
+              "value": "farda",
+              "label": "Radio Farda · فارسی"
+            },
+            {
+              "value": "yar",
+              "label": "Radio Yar · فارسی"
+            },
+            {
+              "value": "navahang",
+              "label": "Navahang · موسیقی ایرانی"
+            }
+          ]
+        }
+      ],
+      "board": "esp32-s3-lcd-0.85",
+      "path": "/projects/esp32-s3-lcd-0.85/radio/1.1.0.elf",
+      "size": 3400,
+      "md5": "ce34122218d8db49848c845237acc30f",
+      "sha256": "439ab61931672426740fd3e203a8365cf4389b16285b95887ca5221ec4ef38e8"
+    },
+    {
       "id": "weather",
       "name": "Weather",
       "version": "1.1.0",

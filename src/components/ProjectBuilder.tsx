@@ -2,14 +2,16 @@
 
 import { Button } from "@headlessui/react";
 import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthCard } from "@/components/AuthCard";
-import { ToastBanner, accentButton, cardClass, inputClass, secondaryButton, useToast } from "@/components/ui";
+import { ProjectBuilderGuide } from "@/components/ProjectBuilderGuide";
+import { Sheet, ToastBanner, accentButton, cardClass, inputClass, secondaryButton, useToast } from "@/components/ui";
 import { api, deviceName, isOtaActive } from "@/lib/device-client";
 import type { PublicDevice } from "@/lib/device-types";
 import { errorMessage } from "@/lib/esp";
 
 const DRAFT_KEY = "esp32-console-project-builder-v1";
+const BUILDER_BOARD = "esp32-s3-lcd-0.85";
 const STARTER = `#include "project_builder.h"
 
 void setup(ProjectBoard *board) {
@@ -40,12 +42,14 @@ export function ProjectBuilder({ active }: { active: boolean }) {
   const user = session?.user;
   const [draft, setDraft] = useState<Draft>(INITIAL);
   const [loaded, setLoaded] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<"saving" | "saved" | "error">("saved");
+  const revision = useRef(0);
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   const [deviceId, setDeviceId] = useState("");
   const [binary, setBinary] = useState<Blob | null>(null);
   const [building, setBuilding] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useToast();
 
@@ -53,7 +57,18 @@ export function ProjectBuilder({ active }: { active: boolean }) {
     const frame = requestAnimationFrame(() => {
       try {
         const value = localStorage.getItem(DRAFT_KEY);
-        if (value) setDraft({ ...INITIAL, ...JSON.parse(value) });
+        if (value) {
+          const stored = JSON.parse(value) as Partial<Draft>;
+          if (stored && typeof stored === "object") {
+            setDraft({
+              id: typeof stored.id === "string" ? stored.id : INITIAL.id,
+              name: typeof stored.name === "string" ? stored.name : INITIAL.name,
+              version: typeof stored.version === "string" ? stored.version : INITIAL.version,
+              description: typeof stored.description === "string" ? stored.description : INITIAL.description,
+              source: typeof stored.source === "string" ? stored.source : INITIAL.source,
+            });
+          }
+        }
       } catch { /* Keep the starter sketch when browser storage is unavailable. */ }
       setLoaded(true);
     });
@@ -61,23 +76,49 @@ export function ProjectBuilder({ active }: { active: boolean }) {
   }, []);
 
   useEffect(() => {
+    if (!loaded) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+        setDraftStatus("saved");
+      } catch { setDraftStatus("error"); }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [draft, loaded]);
+
+  useEffect(() => {
     if (!active || !user) return;
     api<{ devices: PublicDevice[] }>("/api/devices")
-      .then(({ devices }) => { setDevices(devices); setDeviceId((current) => current || devices[0]?.id || ""); })
+      .then(({ devices }) => {
+        const supported = devices.filter((entry) => entry.board === BUILDER_BOARD);
+        setDevices(supported);
+        setDeviceId((current) => supported.some((entry) => entry.id === current) ? current : supported[0]?.id || "");
+      })
       .catch((err) => setError(errorMessage(err)));
   }, [active, user]);
 
   const change = <K extends keyof Draft>(key: K, value: Draft[K]) => {
+    revision.current += 1;
     setDraft((current) => ({ ...current, [key]: value }));
-    setBinary(null); setSaved(false); setError(null);
+    setBinary(null); setDraftStatus("saving"); setError(null);
   };
   const saveDraft = () => {
     try {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-      setSaved(true); setToast("Draft saved in this browser.");
-    } catch { setError("This browser could not save the draft. Download the .ino file instead."); }
+      setDraftStatus("saved"); setToast("Draft saved in this browser.");
+    } catch { setDraftStatus("error"); setError("This browser could not save the draft. Download the .ino file instead."); }
+  };
+  const newSketch = () => {
+    if (!window.confirm("Start a new sketch? This will replace the current draft in this browser.")) return;
+    revision.current += 1;
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* The save status will report unavailable storage. */ }
+    setDraft(INITIAL);
+    setBinary(null);
+    setDraftStatus("saving");
+    setError(null);
   };
   const build = async () => {
+    const buildRevision = revision.current;
     setBuilding(true); setError(null); setBinary(null);
     try {
       const response = await fetch("/api/project-builder", {
@@ -90,9 +131,14 @@ export function ProjectBuilder({ active }: { active: boolean }) {
         throw new Error(body.error || `Build failed (${response.status}).`);
       }
       const elf = await response.blob();
-      setBinary(elf); setToast(`Build succeeded · ${elf.size.toLocaleString()} bytes`);
-    } catch (err) { setError(errorMessage(err)); }
-    finally { setBuilding(false); }
+      if (buildRevision === revision.current) {
+        setBinary(elf); setToast(`Build succeeded · ${elf.size.toLocaleString()} bytes`);
+      }
+    } catch (err) { if (buildRevision === revision.current) setError(errorMessage(err)); }
+    finally {
+      if (buildRevision !== revision.current) setError("The sketch changed while compiling. Compile again to install or download the current version.");
+      setBuilding(false);
+    }
   };
   const install = async () => {
     if (!binary || !deviceId) return;
@@ -148,7 +194,10 @@ export function ProjectBuilder({ active }: { active: boolean }) {
           />
           <div className="flex flex-wrap items-center gap-2 border-t border-zinc-200 p-4 dark:border-zinc-800">
             <Button onClick={build} disabled={building} className={accentButton + " h-10 px-4"}>{building ? "Compiling…" : "Compile ELF"}</Button>
-            <Button onClick={saveDraft} className={secondaryButton + " h-10 px-4"}>{saved ? "Draft saved" : "Save draft"}</Button>
+            <Button onClick={saveDraft} className={secondaryButton + " h-10 px-4"}>Save now</Button>
+            <span role="status" className={`text-xs ${draftStatus === "error" ? "text-red-600 dark:text-red-400" : "text-zinc-500"}`}>
+              {draftStatus === "error" ? "Could not save in this browser. Download the .ino file." : draftStatus === "saving" ? "Saving draft…" : "Saved in this browser"}
+            </span>
             <label className={secondaryButton + " flex h-10 cursor-pointer items-center px-4"}>
               Open .ino
               <input
@@ -165,14 +214,14 @@ export function ProjectBuilder({ active }: { active: boolean }) {
             </label>
             <Button onClick={() => download(new Blob([draft.source], { type: "text/plain" }), `${draft.id || "project"}.ino`)} className={secondaryButton + " h-10 px-4"}>Download .ino</Button>
             {binary && <Button onClick={() => download(binary, `${draft.id}-${draft.version}.elf`)} className={secondaryButton + " h-10 px-4"}>Download ELF · {binary.size.toLocaleString()} B</Button>}
-            <Button onClick={() => { if (window.confirm("Start a new sketch? Unsaved editor changes will be lost.")) { localStorage.removeItem(DRAFT_KEY); setDraft(INITIAL); setBinary(null); setSaved(false); setError(null); } }} className="ml-auto h-10 px-2 text-sm text-zinc-500 underline">New sketch</Button>
+            <Button onClick={newSketch} className="ml-auto h-10 px-2 text-sm text-zinc-500 underline">New sketch</Button>
           </div>
         </section>
 
         <aside className="space-y-4 xl:sticky xl:top-4">
           <section className={cardClass + " space-y-3 p-4"}>
             <h3 className="text-sm font-semibold">Install on board</h3>
-            {devices === null ? <p className="text-xs text-zinc-500">Loading boards…</p> : devices.length === 0 ? <p className="text-xs text-zinc-500">Add a board in Devices first.</p> : (
+            {devices === null ? <p className="text-xs text-zinc-500">Loading boards…</p> : devices.length === 0 ? <p className="text-xs text-zinc-500">Add an ESP32-S3-LCD-0.85 board in Devices to install Builder projects. Other boards are not supported yet.</p> : (
               <select className={inputClass} value={deviceId} onChange={(event) => setDeviceId(event.target.value)}>
                 {devices.map((entry) => <option key={entry.id} value={entry.id}>{deviceName(entry)} · {entry.online ? "Online" : "Offline"}</option>)}
               </select>
@@ -183,7 +232,7 @@ export function ProjectBuilder({ active }: { active: boolean }) {
           </section>
           <section className={cardClass + " space-y-3 p-4 text-xs"}>
             <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Board API</h3><a href="/api/project-builder" className="text-blue-600 underline">Download header</a></div>
-            <a href="/project-builder-guide.md" target="_blank" className="block rounded-lg bg-blue-50 p-2 font-medium text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">Open coding guide and examples ↗</a>
+            <Button onClick={() => setGuideOpen(true)} className="block w-full rounded-lg bg-blue-50 p-2 text-left font-medium text-blue-700 data-hover:bg-blue-100 dark:bg-blue-950/50 dark:text-blue-300 dark:data-hover:bg-blue-950">Open coding guide and examples</Button>
             <p className="text-zinc-500">One include exposes the stable, bounded ABI 4 board capabilities.</p>
             <Api label="Display" value="128 × 128 · RGB565" />
             <Api label="Drawing" value="text, line, ring, circle, rectangles" />
@@ -196,6 +245,9 @@ export function ProjectBuilder({ active }: { active: boolean }) {
           </section>
         </aside>
       </div>
+      <Sheet open={guideOpen} onClose={() => setGuideOpen(false)} title="Project Builder coding guide" subtitle="ESP32-S3-LCD-0.85 · ABI 4" wide>
+        <ProjectBuilderGuide />
+      </Sheet>
       <ToastBanner toast={toast} />
     </div>
   );

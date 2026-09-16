@@ -59,6 +59,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
       const project = projectPackage(body.project, device.board);
       if (!project) return bad("Project package is not available for this board.");
       if (project.abi > device.projectApi) return bad(`${project.name} ${project.storage ? "stores its files on an SD card and " : ""}needs a newer base firmware. Update the firmware first.`);
+      if (device.firmware.localeCompare(project.minimumFirmware, undefined, { numeric: true }) < 0) return bad(`${project.name} requires base firmware v${project.minimumFirmware} or newer.`);
       // The board is the authority on the card: it checks presence and free space again before downloading.
       projectInfo = { name: project.name, version: project.version, size: project.size + (project.storage?.bytes ?? 0) };
       arg = new URLSearchParams({ id: project.id, version: project.version, path: project.path, abi: String(project.abi), size: String(project.size), md5: project.md5, sha256: project.sha256, ...(project.storage && project.assets ? { assets: project.assets.path, assets_sha256: project.assets.sha256, sd: String(project.storage.bytes) } : {}) }).toString();

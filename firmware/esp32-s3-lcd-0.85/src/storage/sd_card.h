@@ -7,11 +7,11 @@
 #include <driver/sdmmc_types.h>
 #include <esp_heap_caps.h>
 #include <diskio_impl.h>
-#include <diskio_sdmmc.h>
 #include <esp_vfs_fat.h>
 #include <ff.h>
 #include <sdmmc_cmd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -60,6 +60,8 @@ class SdCard {
   // card's FAT one sector at a time and takes hours on a 128 GB card.
   bool Format() {
     Unmount();
+    format_written_ = 0;
+    format_expected_ = 0;
     const bool formatted = FormatWidth(false) || FormatWidth(true);
     if (!formatted) {
       problem_ = Diagnose();
@@ -70,6 +72,9 @@ class SdCard {
 
   bool mounted() const { return mounted_; }
   Problem problem() const { return problem_; }
+  // Sectors written by the running Format() and the estimated total (0 until the card is probed).
+  uint64_t format_written() const { return format_written_; }
+  uint64_t format_expected() const { return format_expected_; }
 
   // Fits the 128 px display and the hardware check.
   const char* ProblemLabel() const {
@@ -167,16 +172,66 @@ class SdCard {
         work = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
       }
       if (!work) return;
-      ff_diskio_register_sdmmc(pdrv, card);
+      format_written_ = 0;
+      format_expected_ = ExpectedFormatSectors(card->csd.capacity);
+      format_card_ = card;
+      format_owner_ = this;
+      ff_diskio_register(pdrv, FormatDisk());
       const char drive[3] = {static_cast<char>('0' + pdrv), ':', '\0'};
       // FatFs chooses the cluster size for the card (32 KB on large cards); two FATs, MBR layout.
       const MKFS_PARM options = {FM_FAT | FM_FAT32, 2, 0, 0, 0};
       ok = f_mkfs(drive, &options, work, size) == FR_OK;
       ff_diskio_unregister(pdrv);
+      format_card_ = nullptr;
+      format_owner_ = nullptr;
       free(work);
     });
     return ok;
   }
+
+  // Almost all of a format is zeroing the two FATs. Mirrors FatFs's FAT32 cluster-size choice for
+  // a volume behind a 2048-sector partition gap; only used to scale the progress bar.
+  static uint64_t ExpectedFormatSectors(uint64_t card_sectors) {
+    const uint64_t volume = card_sectors > 2048 ? card_sectors - 2048 : card_sectors;
+    static constexpr uint16_t kClusterSteps[] = {1, 2, 4, 8, 16, 32};
+    uint64_t cluster = 1;
+    for (const uint16_t step : kClusterSteps) {
+      if (step > volume / 0x20000) break;
+      cluster <<= 1;
+    }
+    const uint64_t fat = ((volume / cluster + 2) * 4 + 511) / 512;
+    return 2 * fat + cluster + 64;
+  }
+
+  // FatFs disk driver used only while formatting: the SDMMC calls of ESP-IDF's own driver, plus a
+  // written-sector count for progress. TRIM is skipped; erasing a whole large card can take minutes.
+  static DSTATUS FormatDiskInit(unsigned char) { return 0; }
+  static DSTATUS FormatDiskStatus(unsigned char) { return 0; }
+  static DRESULT FormatDiskRead(unsigned char, unsigned char* buffer, uint32_t sector, unsigned count) {
+    return sdmmc_read_sectors(format_card_, buffer, sector, count) == ESP_OK ? RES_OK : RES_ERROR;
+  }
+  static DRESULT FormatDiskWrite(unsigned char, const unsigned char* buffer, uint32_t sector, unsigned count) {
+    if (sdmmc_write_sectors(format_card_, buffer, sector, count) != ESP_OK) return RES_ERROR;
+    format_owner_->format_written_ += count;
+    return RES_OK;
+  }
+  static DRESULT FormatDiskIoctl(unsigned char, unsigned char command, void* buffer) {
+    switch (command) {
+      case CTRL_SYNC: return RES_OK;
+      case GET_SECTOR_COUNT: *static_cast<LBA_t*>(buffer) = format_card_->csd.capacity; return RES_OK;
+      case GET_SECTOR_SIZE: *static_cast<WORD*>(buffer) = format_card_->csd.sector_size; return RES_OK;
+      case CTRL_TRIM: return RES_OK;
+      default: return RES_ERROR;
+    }
+  }
+  static const ff_diskio_impl_t* FormatDisk() {
+    static const ff_diskio_impl_t disk = {FormatDiskInit, FormatDiskStatus, FormatDiskRead, FormatDiskWrite,
+                                          FormatDiskIoctl};
+    return &disk;
+  }
+  static inline sdmmc_card_t* format_card_ = nullptr;
+  static inline SdCard* format_owner_ = nullptr;
+
 
   static Problem Classify(sdmmc_card_t* card, uint8_t* sector) {
     if (sdmmc_read_sectors(card, sector, 0, 1) != ESP_OK) return Problem::ReadError;
@@ -210,5 +265,6 @@ class SdCard {
 
   gpio_num_t clk_, cmd_, d0_, d1_, d2_, d3_;
   bool mounted_ = false;
+  std::atomic<uint64_t> format_written_{0}, format_expected_{0};
   Problem problem_ = Problem::None;
 };

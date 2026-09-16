@@ -19,6 +19,7 @@
 #include "services/led_feedback.h"
 #include "led/led_pattern.h"
 #include "services/network.h"
+#include "services/serial_fs.h"
 #include "services/time_zones.h"
 #include "services/web_portal.h"
 #include "ui/icons.h"
@@ -149,6 +150,8 @@ MenuItem Info(const std::string& label, std::function<std::string()> value) {
 void App::Start() {
   // Room for long JSON replies; never stall the main loop when no host is reading.
   Serial.setTxBufferSize(4096);
+  // USB uploads from the SD file manager arrive in blocks that must fit this queue.
+  Serial.setRxBufferSize(SerialFs::kRxBufferBytes);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
 
@@ -300,6 +303,7 @@ void App::Loop() {
   Network::GetInstance().Loop(now);
   WebPortal::GetInstance().Loop(now);
   ConsoleClient::GetInstance().Loop(now);
+  SerialFs::Get().Loop(now);
   if (ProjectRuntime::Get().Busy()) { menu_.Close(); board.WakeUp(); }
   UpdatePowerHold(now);
   CheckHeap(now);
@@ -978,7 +982,7 @@ void App::HandleSerial() {
     if (ch == '\n' || ch == '\r') {
       if (!serial_line_.empty()) HandleCommand(serial_line_);
       serial_line_.clear();
-    } else if (serial_line_.size() < 160) {
+    } else if (serial_line_.size() < 1024) {
       serial_line_ += ch;
     }
   }
@@ -993,6 +997,10 @@ void App::HandleCommand(const std::string& line) {
   const auto args = Split(line);
   if (args.empty()) return;
   const std::string& cmd = args[0];
+  if (cmd == "fs") {
+    SerialFs::Get().Handle(line);
+    return;
+  }
   auto num = [&](size_t i, int fallback) {
     return i < args.size() ? atoi(args[i].c_str()) : fallback;
   };
@@ -1139,6 +1147,7 @@ void App::HandleCommand(const std::string& line) {
         "led <r> <g> <b> | led pixel <i> <r> <g> <b> | led off | "
         "wifi <ssid> [password] | wifi on|off | console <url>|off|unlink|insecure [on|off]|status | ble on|off | tz <Europe/Berlin|...> | time <epoch> | "
         "status <text> | notify <text> | theme <light|dark> | backlight <0-100> | "
+        "fs ls|get|put|rm|mkdir|mv|mount|unmount|format|info … | "
         "reboot | poweroff | factoryreset");
   } else {
     Serial.println("{\"ok\":false,\"error\":\"unknown command\"}");
@@ -1185,7 +1194,7 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
-  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=4";
+  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=5";
   body += "&project_version=" + ProjectRuntime::Get().Version();
   body += "&project_sha256=" + ProjectRuntime::Get().Sha256();
   body += "&project_safe=" + std::string(ProjectRuntime::Get().SafeMode() ? "1" : "0");
@@ -1205,9 +1214,10 @@ std::string App::ReportTelemetry() {
   int battery = -1;
   bool charging = false, discharging = false;
   if (!board.GetBatteryLevel(battery, charging, discharging)) battery = -1;
-  char buf[96];
-  snprintf(buf, sizeof(buf), "battery=%d&charging=%s&heap=%lu&uptime=%lu", battery,
-           charging ? "1" : "0", (unsigned long)ESP.getFreeHeap(), millis() / 1000);
+  const int battery_mv = static_cast<int>(std::lround(board.GetPowerManager()->GetBatteryVoltage() * 1000.0f));
+  char buf[120];
+  snprintf(buf, sizeof(buf), "battery=%d&battery_mv=%d&charging=%s&heap=%lu&uptime=%lu", battery,
+           battery_mv, charging ? "1" : "0", (unsigned long)ESP.getFreeHeap(), millis() / 1000);
   return std::string(buf) + "&reset_reason=" + std::to_string(esp_reset_reason());
 }
 

@@ -32,6 +32,7 @@ export function Devices({ active }: { active: boolean }) {
   const user = session?.user;
   const [devices, setDevices] = useState<PublicDevice[] | null>(null);
   const [connection, setConnection] = useState<"connecting" | "live" | "retrying">("connecting");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [query, setQuery] = useState("");
@@ -45,12 +46,23 @@ export function Devices({ active }: { active: boolean }) {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
     let failures = 0;
+    let hasSnapshot = false;
+    api<{ devices: PublicDevice[] }>("/api/devices")
+      .then(({ devices }) => {
+        if (stopped) return;
+        hasSnapshot = true;
+        setDevices(devices);
+        setLoadError(null);
+      })
+      .catch((err) => { if (!stopped && !hasSnapshot) setLoadError(errorMessage(err)); });
     const open = () => {
       if (stopped) return;
       source?.close();
       source = new EventSource("/api/devices/stream");
       source.addEventListener("devices", (event) => {
+        hasSnapshot = true;
         setDevices(JSON.parse((event as MessageEvent).data));
+        setLoadError(null);
         failures = 0;
         setConnection("live");
       });
@@ -108,7 +120,7 @@ export function Devices({ active }: { active: boolean }) {
           <h2 className="text-sm font-semibold">Devices</h2>
           <p className="truncate text-xs text-zinc-500">
             {devices === null
-              ? "Loading…"
+              ? loadError ? "Could not load devices" : "Loading…"
               : `${devices.length} linked · ${devices.filter((d) => d.online).length} online`}
             {connection === "retrying" && " · reconnecting…"}
           </p>
@@ -132,7 +144,19 @@ export function Devices({ active }: { active: boolean }) {
         </div>
       </section>
 
-      {devices === null && (
+      {loadError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
+          <span>{loadError}</span>
+          <Button onClick={() => {
+            setLoadError(null);
+            void api<{ devices: PublicDevice[] }>("/api/devices")
+              .then(({ devices }) => { setDevices(devices); setConnection("connecting"); })
+              .catch((err) => setLoadError(errorMessage(err)));
+          }} className="font-medium underline">Retry</Button>
+        </div>
+      )}
+
+      {devices === null && !loadError && (
         <div className="space-y-3" aria-hidden>
           <Skeleton className="h-[168px] w-full" />
           <Skeleton className="h-[168px] w-full" />

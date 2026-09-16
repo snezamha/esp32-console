@@ -1,0 +1,15 @@
+{
+  "id": "esp32-s3-touch-amoled-2.06",
+  "name": "ESP32-S3-Touch-AMOLED-2.06",
+  "vendor": "Waveshare",
+  "chip": "ESP32-S3",
+  "flashSizeMb": 32,
+  "fqbn": "esp32:esp32:esp32s3:FlashSize=32M,PartitionScheme=app5M_fat24M_32MB,USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi",
+  "preserve": [
+    {
+      "name": "nvs",
+      "offset": 36864,
+      "size": 20480
+    }
+  ]
+}

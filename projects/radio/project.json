@@ -1,0 +1,29 @@
+{
+  "id": "radio",
+  "name": "Internet radio",
+  "version": "1.1.0",
+  "abi": 5,
+  "description": "Stream live MP3 radio, including Persian stations. Hold + or − to change stations; tap to adjust volume.",
+  "category": "Music",
+  "icon": "radio",
+  "accent": "#f97316",
+  "minimumFirmware": "1.1.12",
+  "capabilities": ["internet", "speaker"],
+  "settings": [
+    {
+      "key": "station",
+      "type": "select",
+      "label": "Starting station",
+      "default": "paradise",
+      "options": [
+        { "value": "paradise", "label": "Radio Paradise" },
+        { "value": "groove", "label": "Groove Salad" },
+        { "value": "agent", "label": "Secret Agent" },
+        { "value": "drone", "label": "Drone Zone" },
+        { "value": "farda", "label": "Radio Farda · فارسی" },
+        { "value": "yar", "label": "Radio Yar · فارسی" },
+        { "value": "navahang", "label": "Navahang · موسیقی ایرانی" }
+      ]
+    }
+  ]
+}

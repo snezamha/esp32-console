@@ -26,6 +26,8 @@ class BoxAudioCodec {
   bool es7210_found() const { return es7210_found_; }
   bool started() const { return started_; }
   int sample_rate() const { return sample_rate_; }
+  int default_sample_rate() const { return default_sample_rate_; }
+  bool SetSampleRate(int sample_rate);
 
   int output_volume() const { return output_volume_; }
   void SetOutputVolume(int volume);
@@ -40,6 +42,7 @@ class BoxAudioCodec {
  private:
   i2c_master_bus_handle_t i2c_bus_;
   int sample_rate_;
+  int default_sample_rate_;
   gpio_num_t mclk_, bclk_, ws_, dout_, din_, pa_pin_;
   uint8_t es8311_addr_, es7210_addr_;
 

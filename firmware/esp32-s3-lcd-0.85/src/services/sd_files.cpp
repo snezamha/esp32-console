@@ -9,15 +9,17 @@
 #include "../board/board.h"
 #include "../runtime/project_runtime.h"
 #include "../storage/sd_card.h"
+#include "serial_fs.h"
 
 extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
 
 namespace {
 constexpr size_t kMaxListing = 1000;
+}  // namespace
 
 // Absolute path without empty, "." or ".." segments.
-bool ValidPath(const std::string& path) {
+bool SdFiles::ValidPath(const std::string& path) {
   if (path.empty() || path[0] != '/' || path.size() > 200) return false;
   if (path == "/") return true;
   if (path.back() == '/') return false;
@@ -31,7 +33,7 @@ bool ValidPath(const std::string& path) {
   }
 }
 
-bool RemoveTree(fs::FS& fs, const std::string& path) {
+bool SdFiles::RemoveTree(fs::FS& fs, const std::string& path) {
   File entry = fs.open(path.c_str());
   if (!entry) return false;
   if (!entry.isDirectory()) {
@@ -49,6 +51,30 @@ bool RemoveTree(fs::FS& fs, const std::string& path) {
   return fs.rmdir(path.c_str()) && ok;
 }
 
+namespace {
+// Streams a file to HTTPClient while counting the bytes handed over.
+class CountingStream : public Stream {
+ public:
+  CountingStream(fs::File* file, std::atomic<uint64_t>& count) : file_(*file), count_(count) {}
+  int available() override { return file_.available(); }
+  int read() override {
+    const int value = file_.read();
+    if (value >= 0) count_++;
+    return value;
+  }
+  int peek() override { return file_.peek(); }
+  size_t readBytes(uint8_t* buffer, size_t length) override {
+    const size_t count = file_.read(buffer, length);
+    count_ += count;
+    return count;
+  }
+  size_t write(uint8_t) override { return 0; }
+
+ private:
+  fs::File& file_;
+  std::atomic<uint64_t>& count_;
+};
+
 std::string Hex(const uint8_t* digest) {
   static const char hex[] = "0123456789abcdef";
   std::string out(64, '0');
@@ -63,6 +89,7 @@ std::string Hex(const uint8_t* digest) {
 std::string SdFiles::Start(const ConsoleClient::Command& command, const std::string& server, bool insecure,
                            const std::string& token) {
   if (busy_) return "fail|Another SD card operation is running";
+  if (SerialFs::Get().Busy()) return "fail|The card is being formatted over USB";
   if (ProjectRuntime::Get().Busy()) return "fail|A project installation is running";
   const auto& arg = command.arg;
   type_ = command.type;
@@ -85,6 +112,8 @@ std::string SdFiles::Start(const ConsoleClient::Command& command, const std::str
   token_ = token;
   insecure_ = insecure;
   result_.clear();
+  progress_done_ = 0;
+  progress_total_ = 0;
   // Destructive operations must not race the running module's asset reads.
   if (type_ == "sd_mount" || type_ == "sd_unmount" || type_ == "sd_delete" || type_ == "sd_rename" || type_ == "sd_format") ProjectRuntime::Get().LockSd();
   done_ = false;
@@ -95,6 +124,17 @@ std::string SdFiles::Start(const ConsoleClient::Command& command, const std::str
     return "fail|No memory for the SD card operation";
   }
   return "";
+}
+
+std::string SdFiles::Report() const {
+  if (!busy_) return "";
+  uint64_t done = progress_done_, total = progress_total_;
+  if (type_ == "sd_format") {
+    const auto* sd = Board::GetInstance().GetSdCard();
+    total = sd->format_expected();
+    done = std::min(sd->format_written(), total);
+  }
+  return "&sd.job=" + id_ + "%7C" + std::to_string(done) + "%7C" + std::to_string(total);
 }
 
 std::vector<std::string> SdFiles::Loop() {
@@ -157,6 +197,7 @@ std::string SdFiles::Run() {
     File file = fs.open(path_.c_str(), FILE_READ);
     if (!file || file.isDirectory()) return "fail|File not found";
     if (file.size() > 4 * 1024 * 1024) return "fail|Files larger than 4 MB cannot be downloaded through the console";
+    progress_total_ = file.size();
     const auto error = Post(nullptr, file.size(), &file);
     file.close();
     return error.empty() ? "ok|Sent to console" : "fail|" + error;
@@ -196,7 +237,13 @@ std::string SdFiles::Post(const uint8_t* data, size_t size, fs::File* file) {
   if (!(tls ? http.begin(secure, url_.c_str()) : http.begin(plain, url_.c_str()))) return "Could not reach the console";
   http.addHeader("Authorization", ("Bearer " + token_).c_str());
   http.addHeader("Content-Type", "application/octet-stream");
-  const int code = file ? http.sendRequest("POST", file, size) : http.POST(const_cast<uint8_t*>(data), size);
+  int code;
+  if (file) {
+    CountingStream stream(file, progress_done_);
+    code = http.sendRequest("POST", &stream, size);
+  } else {
+    code = http.POST(const_cast<uint8_t*>(data), size);
+  }
   http.end();
   return code == 200 ? "" : "Console rejected the transfer (HTTP " + std::to_string(code) + ")";
 }
@@ -207,6 +254,7 @@ std::string SdFiles::Receive() {
   auto& fs = sd->fs();
   const uint64_t free = sd->total_bytes() > sd->used_bytes() ? sd->total_bytes() - sd->used_bytes() : 0;
   if (free < size_ + 64 * 1024) return "Not enough free space on the SD card";
+  progress_total_ = size_;
   HTTPClient http;
   NetworkClient plain;
   NetworkClientSecure secure;
@@ -250,6 +298,7 @@ std::string SdFiles::Receive() {
     if (out.write(buffer, count) != count) { error = "SD card write failed"; break; }
     mbedtls_sha256_update(&ctx, buffer, count);
     total += count;
+    progress_done_ = total;
     last_data = millis();
   }
   uint8_t digest[32];

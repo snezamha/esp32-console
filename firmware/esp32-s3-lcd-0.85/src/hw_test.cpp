@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "board/board.h"
+#include "services/radio_stream.h"
 #include "net/wireless.h"
 
 namespace {
@@ -97,7 +98,7 @@ void HwTest::Record(int duration_ms) {
 }
 
 void HwTest::Beep(int frequency_hz, int duration_ms) {
-  if (busy_ || uxQueueMessagesWaiting(queue_) > 0) return;
+  if (busy_ || RadioStream::Get().Active() || uxQueueMessagesWaiting(queue_) > 0) return;
   Job job{JobType::Beep, frequency_hz, duration_ms};
   xQueueSend(queue_, &job, 0);
 }
@@ -127,7 +128,7 @@ void HwTest::TaskMain(void* arg) {
     if (xQueueReceive(self->queue_, &job, portMAX_DELAY) != pdTRUE) continue;
     // Beeps are UI feedback, not checks: they do not mark the tester busy.
     if (job.type == JobType::Beep) {
-      if (self->EnsureCodec()) self->WriteTone(job.a, job.b);
+      if (!RadioStream::Get().Active() && self->EnsureCodec()) self->WriteTone(job.a, job.b);
       continue;
     }
     self->busy_ = true;

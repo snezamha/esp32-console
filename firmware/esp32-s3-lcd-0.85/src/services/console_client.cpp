@@ -305,6 +305,7 @@ std::string ConsoleClient::CommonFields() {
     ota_reported_progress_ = ota_progress_;
   }
   body += ProjectRuntime::Get().Report();
+  body += SdFiles::Get().Report();
   return body;
 }
 
@@ -339,7 +340,8 @@ void ConsoleClient::StartPoll(uint32_t now_ms) {
     poll_.acks = acks_;
     acks_.clear();
     // Hold the poll only when nothing new rides on it, so local changes are never delayed.
-    wait = state_ == State::Linked && state == reported_state_ && poll_.acks.empty();
+    // A running SD operation reports progress and its result on the next poll, so do not hold it.
+    wait = state_ == State::Linked && state == reported_state_ && poll_.acks.empty() && !SdFiles::Get().Busy();
     reported_state_ = state;
   } else {
     body += "&secret=" + secret_;
@@ -366,6 +368,9 @@ void ConsoleClient::RequestTask(void* arg) {
     WiFiClientSecure secure;
     if (slot->tls) AttachCertificates(secure, slot->insecure);
 
+    // Each request owns a short-lived client and task. Close its TCP connection before either
+    // object is destroyed; retaining an HTTP/1.1 connection serves no purpose here.
+    http.useHTTP10(true);
     http.setTimeout(slot->timeout_ms);
     http.setConnectTimeout(10000);
     const bool begun = slot->tls ? http.begin(secure, slot->url.c_str()) : http.begin(plain, slot->url.c_str());

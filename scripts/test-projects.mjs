@@ -24,6 +24,10 @@ const clockConfig = projectConfig.sanitizeProjectConfig("analog-clock", { timezo
 assert.equal(clockConfig.timezone, "Europe/Berlin");
 assert.equal(clockConfig.style, "minimal");
 assert.equal(clockConfig.seconds, true);
+const radioConfig = projectConfig.sanitizeProjectConfig("radio", { station: "drone" });
+assert.equal(radioConfig.station, "drone");
+assert.equal(projectConfig.sanitizeProjectConfig("radio", { station: "farda" }).station, "farda");
+assert.equal(projectConfig.sanitizeProjectConfig("radio", { station: "missing" }).station, "paradise");
 assert.throws(() => projectConfig.sanitizeProjectConfig("missing", {}), /Unknown project/);
 delete globalThis.__projectConfigTest;
 for (const project of manifest.projects) {
@@ -35,7 +39,7 @@ for (const project of manifest.projects) {
   assert.throws(() => inspectProject(file.subarray(0, 100)));
   const abiMarker = file.indexOf(Buffer.from(`"abi":${project.abi}`));
   assert.ok(abiMarker >= 0);
-  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, false]]) {
+  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, false]]) {
     const changed = Buffer.from(file); changed[abiMarker + 6] = 48 + abi;
     if (valid) assert.equal(inspectProject(changed).abi, abi); else assert.throws(() => inspectProject(changed));
   }

@@ -324,18 +324,21 @@ function ProjectTabPanel({
   onInstall: () => void;
 }) {
   const storage = (project as Partial<ProjectDefinition>).storage;
+  const requiredFirmware = (project as Partial<ProjectDefinition>).minimumFirmware;
+  const firmwareTooOld = !!requiredFirmware && device.firmware.localeCompare(requiredFirmware, undefined, { numeric: true }) < 0;
   return (
     <TabPanel className={cardClass + " space-y-4 p-4"}>
       <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">{project.name}</h3>{device.activeProject === project.id && <span className="text-xs text-emerald-600">Active on board</span>}</div>
       <p className="text-xs text-zinc-500">{project.description}</p>
       {"version" in project && <><div className="flex flex-wrap gap-2 text-[11px] text-zinc-500"><span>Catalog v{project.version}</span>{device.activeProject === project.id && device.activeProjectVersion && <span>Installed v{device.activeProjectVersion}</span>}<span>{(project.size / 1024).toFixed(1)} KB</span>{storage && <span>SD card · {megabytes(storage.bytes)} · {storage.files} files</span>}</div><details className="text-xs text-zinc-500"><summary className="cursor-pointer">Package details</summary><p className="mt-1 break-all">SHA-256 {project.sha256}<br/><a href={project.path} download className="text-blue-600 underline">Download verified catalog file</a></p></details></>}
       {storage && <SdCardNotice device={device} bytes={storage.bytes} />}
+      {firmwareTooOld && <p className="text-xs text-amber-600">Update the base firmware to v{requiredFirmware} or newer before loading this project.</p>}
       {project.id !== "none" && <ProjectSettingsForm project={project as ProjectDefinition} value={config} disabled={busy} onChange={onConfig} />}
       {project.id === "none" && <p className="text-xs text-zinc-500">Restore the original firmware display while keeping your board settings. No additional file is required.</p>}
       {saved?.project === project.id && <p role="status" className="text-xs text-emerald-600">{saved.message}</p>}
       <div className="flex flex-wrap gap-2">
         {project.id !== "none" && device.activeProject === project.id && <Button disabled={busy || loading || stopping} onClick={onSave} className="h-10 rounded-xl border border-zinc-300 px-4 text-sm">Save changes</Button>}
-        <Button disabled={disabled || (project.id !== "none" && !modern) || ((project as Partial<ProjectDefinition>).abi ?? 0) > device.projectApi || (project.id === "none" && device.activeProject === "none")} onClick={onInstall} className={accentButton + " h-10 px-4"}>{device.activeProject === project.id ? project.id === "none" ? "Active project" : "Save & reinstall" : project.id === "none" ? "Restore default display" : `Save & load ${project.name}`}</Button>
+        <Button disabled={disabled || firmwareTooOld || (project.id !== "none" && !modern) || ((project as Partial<ProjectDefinition>).abi ?? 0) > device.projectApi || (project.id === "none" && device.activeProject === "none")} onClick={onInstall} className={accentButton + " h-10 px-4"}>{device.activeProject === project.id ? project.id === "none" ? "Active project" : "Save & reinstall" : project.id === "none" ? "Restore default display" : `Save & load ${project.name}`}</Button>
       </div>
     </TabPanel>
   );

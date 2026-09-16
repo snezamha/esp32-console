@@ -31,6 +31,13 @@ class SdFiles {
                     const std::string& token);
   std::vector<std::string> Loop();
   bool Busy() const { return busy_; }
+  // Absolute path without empty, "." or ".." segments.
+  static bool ValidPath(const std::string& path);
+  // Removes a file, or a folder with everything inside it.
+  static bool RemoveTree(fs::FS& fs, const std::string& path);
+  // Poll field `&sd.job=<id>|<done>|<total>` while an operation runs: bytes for transfers, sectors
+  // for a format, and 0|0 when the work has no measurable size.
+  std::string Report() const;
 
  private:
   static void Task(void* arg);
@@ -39,6 +46,7 @@ class SdFiles {
   std::string Receive();
 
   std::atomic<bool> busy_{false}, done_{false};
+  std::atomic<uint64_t> progress_done_{0}, progress_total_{0};
   std::string id_, type_, path_, to_, url_, sha256_, token_, result_;
   size_t size_ = 0;
   bool insecure_ = false;

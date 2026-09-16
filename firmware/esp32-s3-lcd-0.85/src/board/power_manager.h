@@ -1,12 +1,16 @@
 #pragma once
 
+#include <Arduino.h>
 #include <driver/gpio.h>
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_log.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <mutex>
 
 // Battery rail, charge detection and battery level.
 class PowerManager {
@@ -60,36 +64,15 @@ class PowerManager {
   }
 
   float GetBatteryVoltage() {
-    int adc_raw = 0;
-    int voltage_mv = 0;
-    if (adc_handle_ == nullptr || !do_calibration_) return 0.0f;
-    if (adc_oneshot_read(adc_handle_, adc_channel_, &adc_raw) != ESP_OK) return 0.0f;
-    if (adc_cali_raw_to_voltage(adc_cali_handle_, adc_raw, &voltage_mv) != ESP_OK) return 0.0f;
-    return (voltage_mv / 1000.0f) * 3.0f;  // 1:3 divider
+    UpdateReading();
+    return reading_valid_ ? filtered_voltage_mv_ / 1000.0f : 0.0f;
   }
 
-  // Stepped level (1/20/40/60/80/100) with 0.1 V hysteresis.
+  // Estimated Li-ion state of charge. Voltage is useful for trends, but this is not a fuel gauge:
+  // temperature, load and cell chemistry still affect the estimate.
   int GetBatteryLevel() {
-    if (adc_handle_ == nullptr || !do_calibration_) return 100;
-
-    const float voltage = GetBatteryVoltage();
-    if (std::fabs(voltage - last_voltage_) >= kVoltageThreshold) {
-      last_voltage_ = voltage;
-      if (voltage < 3.52f) {
-        last_battery_level_ = 1;
-      } else if (voltage < 3.64f) {
-        last_battery_level_ = 20;
-      } else if (voltage < 3.76f) {
-        last_battery_level_ = 40;
-      } else if (voltage < 3.88f) {
-        last_battery_level_ = 60;
-      } else if (voltage < 4.0f) {
-        last_battery_level_ = 80;
-      } else {
-        last_battery_level_ = 100;
-      }
-    }
-    return last_battery_level_;
+    UpdateReading();
+    return reading_valid_ ? battery_level_ : -1;
   }
 
   bool IsCharging() {
@@ -100,7 +83,7 @@ class PowerManager {
     return charging_pin_ == GPIO_NUM_NC || gpio_get_level(charging_pin_) == 1;
   }
 
-  bool IsChargingDone() { return GetBatteryLevel() == 100; }
+  bool IsChargingDone() { return GetBatteryLevel() >= 99; }
 
   void PowerOff() {
     if (bat_power_pin_ != GPIO_NUM_NC) gpio_set_level(bat_power_pin_, 0);
@@ -111,7 +94,62 @@ class PowerManager {
   }
 
  private:
-  static constexpr float kVoltageThreshold = 0.1f;
+  static constexpr uint32_t kSampleIntervalMs = 1000;
+  static constexpr int kSampleCount = 15;
+  static constexpr float kFilterAlpha = 0.18f;
+  static constexpr float kDividerRatio = 3.0f;
+
+  struct CurvePoint { int millivolts, percent; };
+  static constexpr CurvePoint kDischargeCurve[] = {
+      {3300, 0}, {3500, 5}, {3600, 10}, {3680, 20}, {3740, 30}, {3770, 40},
+      {3790, 50}, {3820, 60}, {3870, 70}, {3950, 80}, {4050, 90}, {4200, 100},
+  };
+
+  static int VoltageToPercent(float millivolts) {
+    if (millivolts <= kDischargeCurve[0].millivolts) return 0;
+    for (size_t i = 1; i < std::size(kDischargeCurve); ++i) {
+      if (millivolts <= kDischargeCurve[i].millivolts) {
+        const auto& low = kDischargeCurve[i - 1]; const auto& high = kDischargeCurve[i];
+        const float position = (millivolts - low.millivolts) / (high.millivolts - low.millivolts);
+        return std::clamp(static_cast<int>(std::lround(low.percent + position * (high.percent - low.percent))), 0, 100);
+      }
+    }
+    return 100;
+  }
+
+  void UpdateReading() {
+    std::lock_guard<std::mutex> lock(reading_mutex_);
+    const uint32_t now = millis();
+    if (reading_valid_ && now - sampled_at_ < kSampleIntervalMs) return;
+    sampled_at_ = now;
+    if (adc_handle_ == nullptr || !do_calibration_) return;
+
+    std::array<int, kSampleCount> raw{};
+    int count = 0;
+    for (int i = 0; i < kSampleCount; ++i) {
+      int value = 0;
+      if (adc_oneshot_read(adc_handle_, adc_channel_, &value) == ESP_OK) raw[count++] = value;
+    }
+    if (count < 7) return;
+    std::sort(raw.begin(), raw.begin() + count);
+    const int trim = count / 5;  // Drop the highest and lowest 20% before averaging.
+    int64_t sum = 0;
+    for (int i = trim; i < count - trim; ++i) sum += raw[i];
+    const int average_raw = static_cast<int>(sum / (count - 2 * trim));
+    int adc_mv = 0;
+    if (adc_cali_raw_to_voltage(adc_cali_handle_, average_raw, &adc_mv) != ESP_OK) return;
+    const float measured_mv = adc_mv * kDividerRatio;
+    if (measured_mv < 2500.0f || measured_mv > 4600.0f) return;
+
+    const float previous_mv = filtered_voltage_mv_;
+    filtered_voltage_mv_ = reading_valid_ ? previous_mv + kFilterAlpha * (measured_mv - previous_mv) : measured_mv;
+    int estimate = VoltageToPercent(filtered_voltage_mv_);
+    if (reading_valid_ && IsDischarging() && estimate > battery_level_ && measured_mv - previous_mv < 200.0f) {
+      estimate = battery_level_;  // Ignore ordinary load recovery while no charger is present.
+    }
+    if (!reading_valid_ || std::abs(estimate - battery_level_) >= 2) battery_level_ = estimate;
+    reading_valid_ = true;
+  }
 
   bool CalibrationInit(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten,
                        adc_cali_handle_t* out_handle) {
@@ -135,6 +173,9 @@ class PowerManager {
   adc_cali_handle_t adc_cali_handle_ = nullptr;
   adc_channel_t adc_channel_ = ADC_CHANNEL_0;
   bool do_calibration_ = false;
-  float last_voltage_ = 0.0f;
-  int last_battery_level_ = 0;
+  std::mutex reading_mutex_;
+  uint32_t sampled_at_ = 0;
+  float filtered_voltage_mv_ = 0.0f;
+  int battery_level_ = -1;
+  bool reading_valid_ = false;
 };

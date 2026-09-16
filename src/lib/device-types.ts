@@ -24,13 +24,17 @@ export const SD_FILES_FIRMWARE = "1.1.1";
 /** First firmware with explicit SD mount and unmount commands. */
 export const SD_MOUNT_FIRMWARE = "1.1.7";
 export type SdEntry = { name: string; folder: boolean; size: number; modified: number };
-export type FileJob = { id: string; type: FileCommandType; status: DeviceCommand["status"]; result: string; entries?: SdEntry[] };
+/** Board-measured work of a running SD operation: bytes for transfers, sectors for a format. */
+export type FileProgress = { done: number; total: number };
+export type FileJob = { id: string; type: FileCommandType; status: DeviceCommand["status"]; result: string; progress?: FileProgress; entries?: SdEntry[] };
 
 export type DeviceCommand = {
   id: string;
   type: CommandType;
   arg: string;
   transfer?: ProjectTransfer;
+  /** Last progress the board reported for a running SD operation. */
+  progress?: FileProgress;
   /** Server-only reference to an uploaded binary; stripped from public responses. */
   fileId?: string;
   /** queued → sent (delivered, waiting for the board's ack) → done | failed */
@@ -52,7 +56,7 @@ export type OtaStatus = {
 
 export type SdCardStatus = { mounted: boolean; total: number; free: number };
 
-export type DeviceSample = { t: number; battery: number; rssi: number; heap: number };
+export type DeviceSample = { t: number; battery: number; batteryMv?: number; rssi: number; heap: number };
 
 /** A device as the panel sees it (no token). */
 export type PublicDevice = {
@@ -66,6 +70,7 @@ export type PublicDevice = {
   ip: string;
   rssi: number;
   battery: number;
+  batteryMv: number;
   charging: boolean;
   heap: number;
   uptime: number;

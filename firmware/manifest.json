@@ -20,14 +20,41 @@
       ],
       "versions": [
         {
-          "version": "1.1.9",
-          "builtAt": "2026-09-15T18:54:27.354Z",
-          "size": 2056192,
-          "sha256": "16f2483289bcd3e9e2c17ab7cb4b66bbcac754cc6b9a9100bba4d97d99d834f4",
+          "version": "1.1.14",
+          "builtAt": "2026-09-16T18:26:13.543Z",
+          "size": 2109440,
+          "sha256": "63a41492a3c59f4e293c5758be7c6a67ad5c72afbded9819ac3cb7c98d8ba5fb",
           "app": {
-            "size": 1988832,
-            "sha256": "286af55258bf9e3dd843e899c9fe83e862b96af1e3acf5b955d3eb1cccdc0f1c",
-            "md5": "f45de6e1e0957defecf18ec3192b0d01"
+            "size": 2043552,
+            "sha256": "9f63d882f38130ff0560c7b3ec68021335b7f1f2225c11c08dc0fdc6f9a4f202",
+            "md5": "f54b356e4a2b84c5893865fee2f24d85"
+          }
+        }
+      ]
+    },
+    {
+      "id": "esp32-s3-touch-amoled-2.06",
+      "name": "ESP32-S3-Touch-AMOLED-2.06",
+      "vendor": "Waveshare",
+      "chip": "ESP32-S3",
+      "flashSizeMb": 32,
+      "preserve": [
+        {
+          "name": "nvs",
+          "offset": 36864,
+          "size": 20480
+        }
+      ],
+      "versions": [
+        {
+          "version": "1.0.0",
+          "builtAt": "2026-09-15T23:56:24.865Z",
+          "size": 2166784,
+          "sha256": "fe56a9111f53dc369eb56d7d35e3b8d3e7bba4031564b00e8b3e0325f89afa0b",
+          "app": {
+            "size": 2099648,
+            "sha256": "f75485adbd19d8ff6f15e9aada4deff32d5d8d75d818bf6eb75cd86576846f97",
+            "md5": "78ac2b5e1df510f7abc89528da389611"
           }
         }
       ]

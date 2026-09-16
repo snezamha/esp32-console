@@ -9,6 +9,7 @@ import type {
   DeviceCommand,
   FileCommandType,
   FileJob,
+  FileProgress,
   SdEntry,
   DeviceSample,
   OtaStatus,
@@ -28,7 +29,7 @@ const SAMPLE_INTERVAL_MS = 60 * 1000;
 const MAX_SAMPLES = 24 * 60;
 const MAX_COMMANDS = 20;
 /** How often a held request re-checks the database while waiting for a change. */
-const POLL_INTERVAL_MS = 1500;
+const POLL_INTERVAL_MS = 800;
 /** Commands the board confirms with an explicit ack; the rest are done once delivered. */
 const FILE_COMMANDS: FileCommandType[] = ["sd_mount", "sd_unmount", "sd_list", "sd_download", "sd_upload", "sd_delete", "sd_mkdir", "sd_rename", "sd_format"];
 const ACKED_COMMANDS: CommandType[] = ["test", "ota", "wifi_add", "wifi_forget", "project_install", "project_stop", ...FILE_COMMANDS];
@@ -64,6 +65,7 @@ function toPublic(row: DeviceRow): PublicDevice {
     ip: row.ip,
     rssi: row.rssi,
     battery: row.battery,
+    batteryMv: row.batteryMv,
     charging: row.charging,
     heap: row.heap,
     uptime: row.uptime,
@@ -134,6 +136,7 @@ export type BoardReport = {
   ip: string;
   rssi: number;
   battery: number;
+  batteryMv: number;
   charging: boolean;
   heap: number;
   uptime: number;
@@ -152,6 +155,7 @@ export type BoardReport = {
   acks: { id: string; ok: boolean; result: string }[];
   projectStatus: { id: string; phase: ProjectTransfer["phase"]; progress: number; bytes: number; total: number } | null;
   projectLogs: { id: string; seq: number; level: "info" | "error"; message: string }[];
+  fileProgress: ({ id: string } & FileProgress) | null;
   resetReason: string;
   unlink: boolean;
 };
@@ -168,6 +172,7 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     ip: report.ip,
     rssi: report.rssi,
     battery: report.battery,
+    batteryMv: report.batteryMv,
     charging: report.charging,
     heap: report.heap,
     uptime: report.uptime,
@@ -236,6 +241,14 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     const fresh = logs.filter((log) => !base.logs.some((entry) => entry.seq === log.seq)).map((log) => ({ seq: log.seq, level: log.level, message: log.message, at: now.getTime() }));
     return { ...command, updatedAt: now.getTime(), transfer: { ...base, ...(status ? { phase: status.phase, progress: status.progress, bytes: status.bytes, total: status.total } : {}), logs: [...base.logs, ...fresh].slice(-200) } };
   });
+  const progress = report.fileProgress;
+  if (progress) {
+    commands = commands.map((c) => {
+      if (c.id !== progress.id || c.status !== "sent" || (c.progress?.done === progress.done && c.progress?.total === progress.total)) return c;
+      commandsChanged = true;
+      return { ...c, progress: { done: progress.done, total: progress.total } };
+    });
+  }
   if (report.acks.length) {
     commands = commands.map((c) => {
       const ack = report.acks.find((a) => a.id === c.id);
@@ -261,7 +274,7 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
   const samples = row.samples as DeviceSample[];
   const last = samples.at(-1);
   if (!last || now.getTime() - last.t >= SAMPLE_INTERVAL_MS) {
-    const next = [...samples, { t: now.getTime(), battery: report.battery, rssi: report.rssi, heap: report.heap }].slice(-MAX_SAMPLES);
+    const next = [...samples, { t: now.getTime(), battery: report.battery, batteryMv: report.batteryMv, rssi: report.rssi, heap: report.heap }].slice(-MAX_SAMPLES);
     data.samples = json(next);
   }
   return data;
@@ -308,7 +321,9 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
     let row: DeviceRow = (await mutateDevice(deviceId, (current) => applyReport(current, report, now)))!;
     let delivery = pickDelivery(row);
 
-    if (idle(delivery) && waitMs > 0) {
+    // While an SD operation runs, answer at once: the board's next check-in carries its progress
+    // and result, and holding this request would delay both by up to `waitMs`.
+    if (idle(delivery) && waitMs > 0 && !(row.commands as DeviceCommand[]).some((command) => fileJobPending(command) && command.status === "sent")) {
       const deadline = Date.now() + waitMs;
       while (Date.now() < deadline && !signal.aborted) {
         await sleep(Math.min(POLL_INTERVAL_MS, deadline - Date.now()), signal);
@@ -672,7 +687,7 @@ export async function fileJob(owner: string, id: string, job: string): Promise<{
   if (!row || !command) return null;
   const expired = command.status === "sent" && Date.now() - command.updatedAt >= FILE_JOB_TIMEOUT_MS;
   const status = expired ? "failed" : command.status;
-  const result: FileJob = { id: job, type: command.type as FileCommandType, status, result: expired ? "The board did not answer." : command.result };
+  const result: FileJob = { id: job, type: command.type as FileCommandType, status, result: expired ? "The board did not answer." : command.result, ...(command.progress ? { progress: command.progress } : {}) };
   let bytes: Buffer | null = null;
   if (status === "done" && (command.type === "sd_list" || command.type === "sd_download")) {
     const file = await db.deviceFile.findFirst({ where: { id: job, deviceId: id }, select: { bytes: true } });

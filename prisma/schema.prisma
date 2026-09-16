@@ -35,6 +35,8 @@ model Device {
   ip        String   @default("")
   rssi      Int      @default(0)
   battery   Int      @default(-1)
+  /// Filtered, calibrated battery-terminal voltage reported by the board.
+  batteryMv Int      @default(0)
   charging  Boolean  @default(false)
   heap      Int      @default(0)
   uptime    Int      @default(0)
@@ -53,7 +55,7 @@ model Device {
   commands         Json    @default("[]")
   tests            Json    @default("{}")
   testsUpdatedAt   DateTime?
-  /// One entry per minute, oldest first: { t, battery, rssi, heap }.
+  /// One entry per minute, oldest first: { t, battery, batteryMv, rssi, heap }.
   samples          Json    @default("[]")
   ota              Json?
   /// [primary ssid, backup ssid].

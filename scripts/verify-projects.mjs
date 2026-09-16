@@ -5,6 +5,8 @@ import { join } from "node:path";
 const root = new URL("..", import.meta.url).pathname;
 const manifest = JSON.parse(readFileSync(join(root, "projects/manifest.json"), "utf8"));
 for (const project of manifest.projects) {
+  const source = JSON.parse(readFileSync(join(root, "projects", project.id, "project.json"), "utf8"));
+  assert.equal(project.abi, source.abi ?? (project.assets ? 3 : 2), `${project.id}: unexpected ABI`);
   const bytes = readFileSync(join(root, "public", project.path));
   assert.equal(bytes.length, project.size);
   for (const hash of ["md5", "sha256"]) assert.equal(createHash(hash).update(bytes).digest("hex"), project[hash]);
@@ -29,7 +31,7 @@ for (const project of manifest.projects) {
     }
   }
   if (project.assets) {
-    assert.equal(project.abi, 3, `${project.id}: SD card assets require ABI 3`);
+    assert.ok(project.abi >= 3, `${project.id}: SD card assets require ABI 3 or newer`);
     const index = readFileSync(join(root, "public", project.assets.path));
     assert.equal(index.length, project.assets.size);
     assert.equal(createHash("sha256").update(index).digest("hex"), project.assets.sha256);
@@ -48,7 +50,7 @@ for (const project of manifest.projects) {
       total += bytes.length; files++;
     }
     assert.deepEqual(project.storage, { sd: true, bytes: total, files }, `${project.id}: storage summary`);
-  } else assert.equal(project.abi, 2, `${project.id}: projects without SD card assets stay on ABI 2`);
+  }
   console.log(`✓ ${project.id}: independent Xtensa ELF, no unresolved imports, valid hashes${project.assets ? `, ${project.storage.files} verified SD card files` : ""}`);
 }
 function verifyBase(dir) {

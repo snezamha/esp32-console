@@ -9,7 +9,12 @@ const failedClaims = new Map<string, number[]>();
 export async function GET() {
   const user = await getUser();
   if (!user) return unauthorized();
-  return Response.json({ devices: await listDevices(user.id) }, { headers: { "Cache-Control": "no-store" } });
+  try {
+    return Response.json({ devices: await listDevices(user.id) }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    console.error("Device list unavailable:", error);
+    return Response.json({ error: "Devices are unavailable. Check the database connection and schema." }, { status: 503 });
+  }
 }
 
 /** Adds the board currently showing `code`. */

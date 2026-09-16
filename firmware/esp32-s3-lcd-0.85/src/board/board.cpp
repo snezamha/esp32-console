@@ -1,4 +1,5 @@
 #include "board.h"
+#include "../services/radio_stream.h"
 
 #include "../led/led_pattern.h"
 
@@ -147,6 +148,7 @@ void Board::InitializeButtons() {
 
   volume_up_button_.OnLongPress([this]() {
     if (menu_open_) return;
+    if (RadioStream::Get().Active()) return;  // Radio project uses a hold to change stations.
     audio_codec_->SetOutputVolume(100);
     display_->ShowNotification(Lang::Strings::MAX_VOLUME);
   });
@@ -164,6 +166,7 @@ void Board::InitializeButtons() {
 
   volume_down_button_.OnLongPress([this]() {
     if (menu_open_) return;
+    if (RadioStream::Get().Active()) return;
     audio_codec_->SetOutputVolume(0);
     display_->ShowNotification(Lang::Strings::MUTED);
   });
@@ -205,6 +208,13 @@ void Board::Loop() {
     volume_down_button_.Cancel();
   }
 
+  // The radio changes stations at 750 ms. Suppress the delayed volume click when
+  // that hold is released before Button's ordinary 1500 ms long-press threshold.
+  if (!menu_open_ && RadioStream::Get().Active()) {
+    if (up && volume_up_button_.HeldMs() >= 750) volume_up_button_.Cancel();
+    if (down && volume_down_button_.HeldMs() >= 750) volume_down_button_.Cancel();
+  }
+
   if (pwr_button_.IsPressed() || volume_up_button_.IsPressed() ||
       volume_down_button_.IsPressed()) {
     idle_seconds_ = 0;
@@ -220,6 +230,7 @@ void Board::OnClockTick(bool busy) {
     GetBacklight()->SetBrightness(10);
   }
   if (config.power_off_seconds > 0 && idle_seconds_ >= config.power_off_seconds &&
+      !RadioStream::Get().Active() &&
       power_manager_->IsDischarging()) {
     PowerOff();
   }
@@ -281,7 +292,7 @@ bool Board::GetBatteryLevel(int& level, bool& charging, bool& discharging) {
   charging = power_manager_->IsCharging();
   discharging = power_manager_->IsDischarging();
   level = power_manager_->GetBatteryLevel();
-  return true;
+  return level >= 0;
 }
 
 void Board::PowerOff() {
