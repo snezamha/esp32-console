@@ -29,6 +29,17 @@ static void copy(char *out, const char *in, int capacity) {
   while (in[i] && i + 1 < capacity) { out[i] = in[i]; ++i; }
   out[i] = 0;
 }
+static void append(char *buf, int *pos, int capacity, const char *s) {
+  while (*s && *pos + 1 < capacity) buf[(*pos)++] = *s++;
+  buf[*pos] = 0;
+}
+static void append_int(char *buf, int *pos, int capacity, int value) {
+  char digits[8];
+  int n = 0;
+  do { digits[n++] = '0' + value % 10; value /= 10; } while (value && n < (int)sizeof(digits));
+  for (int i = 0; i < n && *pos + 1 < capacity; ++i) buf[(*pos)++] = digits[n - i - 1];
+  buf[*pos] = 0;
+}
 
 int app_main(int argc, char **argv) {
   if (argc != 1) return -1;
@@ -56,11 +67,20 @@ int app_main(int argc, char **argv) {
   if (!(f->buttons & 2)) up_latched = 0;
   if (!(f->buttons & 4)) down_latched = 0;
 
-  char status[40], bitrate[20];
+  char status[40], header[24], bottom[32];
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
   const int center = f->width / 2;
-  f->label(f->canvas, 8, "RADIO", f->muted, 1);
+
+  // "RADIO 3/11": station position is otherwise invisible while cycling stations blind with
+  // holds, and every label() centers on the full width, so it rides on the same line as the
+  // title rather than needing a dedicated corner.
+  int hp = 0;
+  append(header, &hp, sizeof(header), "RADIO ");
+  append_int(header, &hp, sizeof(header), station + 1);
+  append(header, &hp, sizeof(header), "/");
+  append_int(header, &hp, sizeof(header), (int)STATION_COUNT);
+  f->label(f->canvas, 8, header, f->muted, 1);
   f->line(f->canvas, 8, 23, f->width - 8, 23, 1, f->accent);
   f->label(f->canvas, 42, stations[station].name, f->text, 2);
   f->label(f->canvas, 64, status, state == 4 ? 0xf800 : f->accent, 1);
@@ -70,15 +90,15 @@ int app_main(int argc, char **argv) {
       f->fill_rect(f->canvas, center - 25 + i * 8, 90 - bar, 4, bar, f->accent);
     }
   }
+  // The +/- hint used to disappear the moment playback started (bitrate took its place); keep a
+  // short reminder alongside the bitrate instead of losing it once someone's a few days in.
+  int bp = 0;
   if (kbps > 0) {
-    int n = 0, value = kbps;
-    char digits[8];
-    do { digits[n++] = '0' + value % 10; value /= 10; } while (value && n < 7);
-    for (int i = 0; i < n; ++i) bitrate[i] = digits[n - i - 1];
-    bitrate[n++] = 'k'; bitrate[n] = 0;
-    f->label(f->canvas, f->height - 9, bitrate, f->muted, 1);
+    append_int(bottom, &bp, sizeof(bottom), kbps);
+    append(bottom, &bp, sizeof(bottom), "k - +/-");
   } else {
-    f->label(f->canvas, f->height - 9, "Hold +/-: station", f->muted, 1);
+    append(bottom, &bp, sizeof(bottom), "Hold +/-: station");
   }
+  f->label(f->canvas, f->height - 9, bottom, f->muted, 1);
   return 0;
 }
