@@ -9,6 +9,10 @@ static const struct Station stations[] = {
   {"farda", "Radio Farda", "https://stream.radiojar.com/cp13r2cpn3quv"},
   {"yar", "Radio Yar", "https://shoutcast.glwiz.com/RadioYAR.mp3"},
   {"navahang", "Navahang", "https://navairan.com/;stream.nsv"},
+  {"bbc", "BBC World Service", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
+  {"dlf", "Deutschlandfunk", "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3"},
+  {"ndrinfo", "NDR Info", "https://icecast.ndr.de/ndr/ndrinfo/live/mp3/128/stream.mp3"},
+  {"1live", "1LIVE", "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
 };
 #define STATION_COUNT (sizeof(stations) / sizeof(stations[0]))
 

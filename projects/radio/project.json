@@ -1,13 +1,13 @@
 {
   "id": "radio",
   "name": "Internet radio",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "abi": 5,
-  "description": "Stream live MP3 radio, including Persian stations. Hold + or − to change stations; tap to adjust volume.",
+  "description": "Stream live MP3 radio, including Persian, German and BBC stations. Hold + or − to change stations; tap to adjust volume.",
   "category": "Music",
   "icon": "radio",
   "accent": "#f97316",
-  "minimumFirmware": "1.1.12",
+  "minimumFirmware": "1.1.15",
   "capabilities": ["internet", "speaker"],
   "settings": [
     {
@@ -22,7 +22,11 @@
         { "value": "drone", "label": "Drone Zone" },
         { "value": "farda", "label": "Radio Farda · فارسی" },
         { "value": "yar", "label": "Radio Yar · فارسی" },
-        { "value": "navahang", "label": "Navahang · موسیقی ایرانی" }
+        { "value": "navahang", "label": "Navahang · موسیقی ایرانی" },
+        { "value": "bbc", "label": "BBC World Service" },
+        { "value": "dlf", "label": "Deutschlandfunk · Deutsch" },
+        { "value": "ndrinfo", "label": "NDR Info · Deutsch" },
+        { "value": "1live", "label": "1LIVE · Deutsch" }
       ]
     }
   ]

@@ -42,8 +42,11 @@ bool BoxAudioCodec::Start() {
 
   // I2S first: the codecs lock onto MCLK during init.
   i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-  chan_cfg.dma_desc_num = 6;
-  chan_cfg.dma_frame_num = 240;
+  // 8*480 (was 6*240) frames of headroom: at a station's 44.1 kHz this is ~87 ms instead of
+  // ~32 ms, giving the radio stream's decode/write loop more slack against brief CPU stalls
+  // elsewhere in the system before the DMA buffer runs dry and playback audibly stutters.
+  chan_cfg.dma_desc_num = 8;
+  chan_cfg.dma_frame_num = 480;
   chan_cfg.auto_clear_after_cb = true;
   if (i2s_new_channel(&chan_cfg, &tx_, &rx_) != ESP_OK) return false;
 

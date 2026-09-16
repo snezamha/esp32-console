@@ -58,13 +58,13 @@
     {
       "id": "radio",
       "name": "Internet radio",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "abi": 5,
-      "description": "Stream live MP3 radio, including Persian stations. Hold + or − to change stations; tap to adjust volume.",
+      "description": "Stream live MP3 radio, including Persian, German and BBC stations. Hold + or − to change stations; tap to adjust volume.",
       "category": "Music",
       "icon": "radio",
       "accent": "#f97316",
-      "minimumFirmware": "1.1.12",
+      "minimumFirmware": "1.1.15",
       "capabilities": [
         "internet",
         "speaker"
@@ -103,15 +103,31 @@
             {
               "value": "navahang",
               "label": "Navahang · موسیقی ایرانی"
+            },
+            {
+              "value": "bbc",
+              "label": "BBC World Service"
+            },
+            {
+              "value": "dlf",
+              "label": "Deutschlandfunk · Deutsch"
+            },
+            {
+              "value": "ndrinfo",
+              "label": "NDR Info · Deutsch"
+            },
+            {
+              "value": "1live",
+              "label": "1LIVE · Deutsch"
             }
           ]
         }
       ],
       "board": "esp32-s3-lcd-0.85",
-      "path": "/projects/esp32-s3-lcd-0.85/radio/1.1.0.elf",
-      "size": 3400,
-      "md5": "ce34122218d8db49848c845237acc30f",
-      "sha256": "439ab61931672426740fd3e203a8365cf4389b16285b95887ca5221ec4ef38e8"
+      "path": "/projects/esp32-s3-lcd-0.85/radio/1.2.0.elf",
+      "size": 4108,
+      "md5": "3929beb8a9dcfeca7edda9d0676eebb5",
+      "sha256": "0c613007951914e0ac0555194d3bd24b3d6703112d36ed3317492c36b99d3a0a"
     },
     {
       "id": "weather",

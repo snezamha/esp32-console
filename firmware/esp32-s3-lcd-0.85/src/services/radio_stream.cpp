@@ -53,7 +53,14 @@ int RadioStream::Start(const char* raw) {
   message_ = "Connecting";
   if (!task_running_) {
     task_running_ = true;
-    if (xTaskCreatePinnedToCore(Task, "radio_stream", 12288, this, 2, nullptr, 0) != pdPASS) {
+    // Core 1, not 0: every other network task (console poll, mDNS, OTA, Wi-Fi/BLE scans) is
+    // pinned to core 0 alongside the Wi-Fi driver and lwIP's own task. The MP3 decode + I2S
+    // write loop below shares that core with all of them under the old pinning, and the I2S DMA
+    // buffer only holds ~32-60 ms of audio — any of those tasks briefly holding core 0 is enough
+    // to starve the decoder and produce an audible stutter. Core 1 only runs the Arduino
+    // loop/display task, which is idle almost all the time, so decode+write no longer competes
+    // for CPU with the network stack.
+    if (xTaskCreatePinnedToCore(Task, "radio_stream", 12288, this, 2, nullptr, 1) != pdPASS) {
       task_running_ = false;
       state_ = 4;
       message_ = "No memory";
@@ -146,6 +153,9 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
   if (tls) secure.setCACertBundle(kCertBundleStart, kCertBundleEnd - kCertBundleStart);
   NetworkClient& client = tls ? static_cast<NetworkClient&>(secure) : plain;
   http.useHTTP10(true);  // A raw MP3 body, with no chunked transfer framing.
+  // Some broadcasters (BBC) reject generic HTTP client user agents with 400 Bad Request and only
+  // serve the stream to player-like ones.
+  http.setUserAgent("VLC/3.0");
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setConnectTimeout(8000);
   http.setTimeout(1500);
