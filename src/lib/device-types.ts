@@ -56,7 +56,7 @@ export type OtaStatus = {
 
 export type SdCardStatus = { mounted: boolean; total: number; free: number };
 
-export type DeviceSample = { t: number; battery: number; batteryMv?: number; rssi: number; heap: number };
+export type DeviceSample = { t: number; battery: number; batteryMv?: number; charging?: boolean; rssi: number; heap: number };
 
 /** A device as the panel sees it (no token). */
 export type PublicDevice = {

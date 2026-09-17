@@ -55,7 +55,7 @@ model Device {
   commands         Json    @default("[]")
   tests            Json    @default("{}")
   testsUpdatedAt   DateTime?
-  /// One entry per minute, oldest first: { t, battery, batteryMv, rssi, heap }.
+  /// One entry per minute and at charging transitions, oldest first: { t, battery, batteryMv, charging, rssi, heap }.
   samples          Json    @default("[]")
   ota              Json?
   /// [primary ssid, backup ssid].

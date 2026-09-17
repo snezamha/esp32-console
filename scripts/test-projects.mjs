@@ -47,7 +47,7 @@ for (const project of manifest.projects) {
   assert.throws(() => inspectProject(file.subarray(0, 100)));
   const abiMarker = file.indexOf(Buffer.from(`"abi":${project.abi}`));
   assert.ok(abiMarker >= 0);
-  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, false]]) {
+  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, true], [7, false]]) {
     const changed = Buffer.from(file); changed[abiMarker + 6] = 48 + abi;
     if (valid) assert.equal(inspectProject(changed).abi, abi); else assert.throws(() => inspectProject(changed));
   }
@@ -195,4 +195,9 @@ await store.syncBoard({ ...report, uptime: 22 }, 0, new AbortController().signal
 assert.equal((await store.uploadForBoard("board-secret", upload.job)).toString(), "hello");
 assert.equal(await store.uploadForBoard("wrong-token", upload.job), null);
 console.log("✓ SD card file manager queueing, board transfers and listings checks passed");
+row.ota = { state: "queued", progress: 0, error: "", version: "1.1.22", updatedAt: Date.now() };
+row.commands.push({ id: "ota-fail", type: "ota", arg: "", status: "failed", result: "No memory for update task", createdAt: Date.now(), updatedAt: Date.now() });
+assert.deepEqual((await store.listDevices("owner"))[0].ota, {
+  state: "failed", progress: 0, error: "No memory for update task", version: "1.1.22", updatedAt: row.commands.at(-1).updatedAt,
+}, "A failed OTA command must not leave the panel waiting for the device");
 delete globalThis.__projectTest;

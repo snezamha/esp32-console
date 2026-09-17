@@ -106,6 +106,7 @@ class ConsoleClient {
   void HandlePoll(int http_code, const std::string& body);
   void HandleCommand(const Command& command);
   void StartOta(const Command& command);
+  void LaunchOta();
   void FinishOta(uint32_t now_ms);
   void SetState(State state);
   void Save();
@@ -144,6 +145,11 @@ class ConsoleClient {
   std::string ota_sha256_;
   std::string ota_version_;
   std::string ota_command_id_;
+  std::string ota_radio_url_;
+  bool ota_waiting_radio_ = false;
+  uint32_t ota_wait_started_ms_ = 0;
+  uint32_t ota_radio_stopped_at_ms_ = 0;
+  uint32_t ota_resume_radio_at_ms_ = 0;
   size_t ota_size_ = 0;
   std::string ota_error_;
   bool ota_ok_ = false;

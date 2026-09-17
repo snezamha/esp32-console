@@ -319,7 +319,10 @@ void App::Loop() {
   WebPortal::GetInstance().Loop(now);
   ConsoleClient::GetInstance().Loop(now);
   SerialFs::Get().Loop(now);
-  if (ProjectRuntime::Get().Busy()) { menu_.Close(); board.WakeUp(); }
+  if (ProjectRuntime::Get().Busy() || ConsoleClient::GetInstance().OtaProgress() >= 0) {
+    menu_.Close();
+    board.WakeUp();
+  }
   UpdatePowerHold(now);
   CheckHeap(now);
 
@@ -396,6 +399,19 @@ void App::DrawOverlay(Canvas& c, int w, int h, const Theme& theme) {
     const int bw = 60, bx = (w - bw) / 2, by = h / 2 + 18;
     c.FillRoundRect(bx, by, bw, 3, 1, Color(0x303038));
     c.FillRoundRect(bx, by, std::max(3, static_cast<int>(bw * t)), 3, 1, Color(0x80A0FF));
+    return;
+  }
+
+  const int update = ConsoleClient::GetInstance().OtaProgress();
+  if (update >= 0) {
+    const int cx = w / 2, cy = h / 2;
+    c.FillRoundRect(cx - 54, cy - 35, 108, 70, 8, theme.background);
+    c.RoundRect(cx - 54, cy - 35, 108, 70, 8, theme.muted);
+    c.TextCentered(cx, cy - 23, "Firmware update", theme.text);
+    const std::string percent = std::to_string(update) + "%";
+    c.TextCentered(cx, cy - 5, percent.c_str(), theme.info, 2);
+    c.FillRoundRect(cx - 42, cy + 20, 84, 5, 2, theme.selected);
+    if (update > 0) c.FillRoundRect(cx - 42, cy + 20, std::max(2, 84 * update / 100), 5, 2, theme.info);
     return;
   }
 
@@ -882,8 +898,17 @@ MenuItems App::BuildBatteryMenu() {
     return l >= 40 ? theme.ok : (l >= 20 ? theme.running : theme.fail);
   };
   items.push_back(level);
-  items.push_back(
-      Info("Charging", [power]() { return std::string(power->IsCharging() ? "Yes" : "No"); }));
+  items.push_back(Info("Power", [power]() {
+    return std::string(power->IsCharging() ? "Charging" : "Not charging");
+  }));
+  items.push_back(Info("10m trend", [power]() {
+    int change_mv = 0;
+    uint32_t minutes = 0;
+    if (!power->GetVoltageChange(change_mv, minutes)) return std::string("Collecting");
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%+dmV / %lum", change_mv, static_cast<unsigned long>(minutes));
+    return std::string(buf);
+  }));
 
   items.push_back(Toggle("Show %", [&config]() { return config.battery_percent; }, [this, &config]() {
     config.battery_percent = !config.battery_percent;

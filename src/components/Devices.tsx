@@ -12,6 +12,7 @@ import {
   LOW_BATTERY,
   api,
   availableUpdate,
+  batteryTrend,
   boardName,
   deviceName,
   isOtaActive,
@@ -268,6 +269,7 @@ function DeviceCard({
   const name = deviceName(device);
   const update = availableUpdate(device);
   const lowBattery = device.battery >= 0 && device.battery < LOW_BATTERY && !device.charging;
+  const trend = batteryTrend(device);
   const ota = device.ota;
   const installing = isOtaActive(ota);
 
@@ -350,7 +352,7 @@ function DeviceCard({
         <Stat label="Firmware" value={device.firmware ? `v${device.firmware}` : "—"} />
         <Stat
           label="Battery"
-          value={device.battery >= 0 ? `${device.battery}%${device.charging ? " ⚡" : ""}` : "—"}
+          value={device.battery >= 0 ? `${device.battery}%${device.charging ? " ⚡" : trend?.direction === -1 ? " ↓" : ""}` : "—"}
           warn={lowBattery}
         />
       </dl>

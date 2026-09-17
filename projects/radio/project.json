@@ -1,13 +1,13 @@
 {
   "id": "radio",
   "name": "Internet radio",
-  "version": "1.4.0",
-  "abi": 5,
-  "description": "Stream live MP3 radio: Persian, German and BBC stations, plus up to 3 of your own, each with its own name and language. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
+  "version": "1.6.0",
+  "abi": 6,
+  "description": "Stream live MP3 radio with an eight-band visualizer driven by decoded audio: Persian, German and BBC stations, plus up to 3 of your own. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
   "category": "Music",
   "icon": "radio",
   "accent": "#f97316",
-  "minimumFirmware": "1.1.20",
+  "minimumFirmware": "1.1.25",
   "capabilities": ["internet", "speaker"],
   "settings": [
     {

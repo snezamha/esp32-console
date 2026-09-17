@@ -17,6 +17,7 @@
 #include "../common/settings.h"
 #include "network.h"
 #include "../runtime/project_runtime.h"
+#include "radio_stream.h"
 #include "sd_files.h"
 
 // Default console address; `pnpm firmware:build` writes console_url.h from the CONSOLE_URL
@@ -257,11 +258,33 @@ void ConsoleClient::Loop(uint32_t now_ms) {
     HandlePoll(poll_.code, poll_.response);
     poll_.busy = false;
   }
+  if (ota_waiting_radio_) {
+    if (!RadioStream::Get().WorkerRunning()) {
+      if (!ota_radio_stopped_at_ms_) ota_radio_stopped_at_ms_ = now_ms;
+      // FreeRTOS reclaims a deleted task's stack from its idle task.
+      if (now_ms - ota_radio_stopped_at_ms_ >= 500) {
+        ota_waiting_radio_ = false;
+        LaunchOta();
+      }
+    } else if (now_ms - ota_wait_started_ms_ > 60000) {
+      ota_waiting_radio_ = false;
+      ota_error_ = "Radio did not release memory";
+      ota_finished_ = true;
+    }
+  }
   if (ota_finished_) {
     ota_finished_ = false;
     FinishOta(now_ms);
   }
+  if (ota_resume_radio_at_ms_ && static_cast<int32_t>(now_ms - ota_resume_radio_at_ms_) >= 0) {
+    ota_resume_radio_at_ms_ = 0;
+    if (!ota_radio_url_.empty()) RadioStream::Get().Start(ota_radio_url_.c_str());
+    ota_radio_url_.clear();
+  }
   if (ota_active_ && ota_progress_ != ota_shown_progress_) {
+    if (ota_progress_ / 10 != ota_shown_progress_ / 10) {
+      Serial.printf("{\"console\":\"ota_progress\",\"percent\":%d}\n", ota_progress_.load());
+    }
     ota_shown_progress_ = ota_progress_;
     Changed();
   }
@@ -571,6 +594,18 @@ void ConsoleClient::StartOta(const Command& command) {
   ota_state_ = "downloading";
   ota_active_ = true;
   Changed();
+  ota_radio_url_ = RadioStream::Get().CurrentUrl();
+  if (!ota_radio_url_.empty()) {
+    RadioStream::Get().Stop();
+    ota_waiting_radio_ = true;
+    ota_wait_started_ms_ = millis();
+    ota_radio_stopped_at_ms_ = 0;
+    return;
+  }
+  LaunchOta();
+}
+
+void ConsoleClient::LaunchOta() {
   if (xTaskCreatePinnedToCore(OtaTask, "console_ota", 8192, this, 1, nullptr, 0) != pdPASS) {
     ota_error_ = "No memory for update task";
     ota_finished_ = true;
@@ -668,6 +703,7 @@ void ConsoleClient::FinishOta(uint32_t now_ms) {
     ota_state_ = "failed";
     acks_.push_back(ota_command_id_ + "|fail|" + ota_error_);
     Board::GetInstance().GetDisplay()->ShowNotification("Update failed", 5000);
+    if (!ota_radio_url_.empty()) ota_resume_radio_at_ms_ = now_ms + 1000;
   }
   Serial.printf("{\"console\":\"ota\",\"ok\":%s,\"detail\":\"%s\"}\n", ota_ok_ ? "true" : "false",
                 ota_error_.c_str());

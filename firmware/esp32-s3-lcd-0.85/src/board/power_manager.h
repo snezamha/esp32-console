@@ -75,6 +75,19 @@ class PowerManager {
     return reading_valid_ ? battery_level_ : -1;
   }
 
+  // Change within the current ten-minute charging or non-charging period.
+  bool GetVoltageChange(int& millivolts, uint32_t& minutes) {
+    UpdateReading();
+    std::lock_guard<std::mutex> lock(reading_mutex_);
+    if (!reading_valid_ || trend_count_ < 2) return false;
+    const int oldest = (trend_next_ + trend_history_.size() - trend_count_) % trend_history_.size();
+    const auto& start = trend_history_[oldest];
+    if (millis() - start.at < 5 * 60 * 1000) return false;
+    millivolts = static_cast<int>(std::lround(filtered_voltage_mv_ - start.mv));
+    minutes = (millis() - start.at) / 60000;
+    return true;
+  }
+
   bool IsCharging() {
     return charging_pin_ != GPIO_NUM_NC && gpio_get_level(charging_pin_) == 0;
   }
@@ -151,6 +164,18 @@ class PowerManager {
       estimate = battery_level_;  // Ignore ordinary load recovery while no charger is present.
     }
     if (!reading_valid_ || std::abs(estimate - battery_level_) >= 2) battery_level_ = estimate;
+    const bool charging = IsCharging();
+    if (!reading_valid_ || charging != trend_charging_) {
+      trend_count_ = 0;
+      trend_next_ = 0;
+      trend_charging_ = charging;
+    }
+    if (trend_count_ == 0 || now - trend_last_sample_ms_ >= 60 * 1000) {
+      trend_history_[trend_next_] = {now, filtered_voltage_mv_};
+      trend_next_ = (trend_next_ + 1) % trend_history_.size();
+      trend_count_ = std::min(trend_count_ + 1, static_cast<int>(trend_history_.size()));
+      trend_last_sample_ms_ = now;
+    }
     reading_valid_ = true;
   }
 
@@ -181,4 +206,10 @@ class PowerManager {
   float filtered_voltage_mv_ = 0.0f;
   int battery_level_ = -1;
   bool reading_valid_ = false;
+  struct TrendSample { uint32_t at; float mv; };
+  std::array<TrendSample, 11> trend_history_{};
+  int trend_next_ = 0;
+  int trend_count_ = 0;
+  uint32_t trend_last_sample_ms_ = 0;
+  bool trend_charging_ = false;
 };

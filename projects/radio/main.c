@@ -143,25 +143,46 @@ static void loading_ring(struct ProjectFrame *f, int x, int y) {
   }
 }
 
-static void side_meters(struct ProjectFrame *f, int playing) {
-  enum { kTop = 58, kSegments = 8, kStep = 4 };
-  const int left = 8, right = f->width - 16;
-  const int volume = f->volume < 0 ? 0 : f->volume > 100 ? 100 : f->volume;
-  const int volume_segments = (volume * kSegments + 99) / 100;
-  // These are visual playback bars; ProjectFrame does not expose audio amplitude.
-  const int animated = playing ? 3 + (int)((f->frame_ms / 160 + (f->frame_ms / 390) % 5) % 6) : 0;
-  f->rect(f->canvas, left - 2, kTop - 2, 12, 36, f->muted);
-  f->rect(f->canvas, right - 2, kTop - 2, 12, 36, f->muted);
-  for (int segment = 0; segment < kSegments; ++segment) {
-    const int y = kTop + (kSegments - 1 - segment) * kStep;
-    if (segment < animated) {
-      const uint16_t color = segment < 3 ? 0x07e0 : segment < 6 ? 0xffe0 : 0xf800;
-      f->fill_rect(f->canvas, left, y, 8, 3, color);
-    }
-    if (segment < volume_segments) {
-      f->fill_rect(f->canvas, right, y, 8, 3, f->accent);
-    }
+// Small color chip next to the header so a station's language is recognizable at a glance
+// while tapping through blind, without needing a second color slot inside label().
+static uint16_t lang_color(const char *lang) {
+  if (same(lang, "FA")) return 0x07ff;
+  if (same(lang, "EN")) return 0x07e0;
+  if (same(lang, "DE")) return 0xffe0;
+  if (same(lang, "AR")) return 0xf81f;
+  if (same(lang, "TR")) return 0xfd20;
+  if (same(lang, "FR")) return 0x001f;
+  if (same(lang, "ES")) return 0xfea0;
+  if (same(lang, "RU")) return 0xf800;
+  return 0xffff;
+}
+
+static void clear_bands(uint8_t *bands) {
+  volatile uint8_t *out = bands;
+  for (int i = 0; i < 8; ++i) out[i] = 0;
+}
+
+// Persists the last played station index in the project's private SD area so the radio resumes
+// where it left off after a reboot, instead of always restarting at the configured default.
+// No-ops when the board has no SD card; the radio still works, it just won't remember.
+static void save_last_station(struct ProjectFrame *f, int index) {
+  if (!f->sd_mounted) return;
+  char digits[8];
+  int n = 0;
+  append_int(digits, &n, sizeof(digits), index);
+  f->storage_write("station.idx", digits, n, 0);
+}
+static int load_last_station(struct ProjectFrame *f) {
+  if (!f->sd_mounted) return -1;
+  char digits[8];
+  int32_t n = f->storage_read("station.idx", 0, digits, sizeof(digits));
+  if (n <= 0) return -1;
+  int value = 0;
+  for (int i = 0; i < n; ++i) {
+    if (digits[i] < '0' || digits[i] > '9') return -1;
+    value = value * 10 + (digits[i] - '0');
   }
+  return value;
 }
 
 int app_main(int argc, char **argv) {
@@ -174,10 +195,12 @@ int app_main(int argc, char **argv) {
   const char *config = f->data[0] ? f->data[0] : "";
   const char *custom_blob = f->data[1] ? f->data[1] : "";
   if (station < 0 || !same(config, last_config) || !same(custom_blob, last_custom)) {
+    const int first_boot = station < 0;
     copy(last_config, config, sizeof(last_config));
     copy(last_custom, custom_blob, sizeof(last_custom));
     parse_custom(custom_blob);
-    station = configured(config);
+    const int restored = first_boot ? load_last_station(f) : -1;
+    station = (restored >= 0 && restored < total_stations()) ? restored : configured(config);
     f->radio_start(station_url(station));
   }
 
@@ -204,57 +227,81 @@ int app_main(int argc, char **argv) {
     if (next || previous) {
       station = (station + (next ? 1 : total_stations() - 1)) % total_stations();
       f->radio_start(station_url(station));
+      save_last_station(f, station);
     }
   }
 
-  char status[40], header[24], info[32], name[CUSTOM_NAME_CAP + 8];
+  char status[40], counter[8], line2[48], info[24];
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
   const int reconnecting = state == 4 && same(status, "Reconnecting");
   const int center = f->width / 2;
+  static uint8_t displayed_bands[8] = {0};
 
-  // "RADIO 3/9": station position is otherwise invisible while tapping through stations blind,
-  // and every label() centers on the full width, so it rides on the same line as the title
-  // rather than needing a dedicated corner.
-  int hp = 0;
-  append(header, &hp, sizeof(header), "RADIO ");
-  append_int(header, &hp, sizeof(header), station + 1);
-  append(header, &hp, sizeof(header), "/");
-  append_int(header, &hp, sizeof(header), total_stations());
-  f->label(f->canvas, 5, header, f->muted, 1);
+  // Just the position ("3/9"), not the whole "RADIO 3/9" — the icon and name already say
+  // it's a radio, and one screen this small can't spare width on a word that adds no data.
+  int cp = 0;
+  append_int(counter, &cp, sizeof(counter), station + 1);
+  append(counter, &cp, sizeof(counter), "/");
+  append_int(counter, &cp, sizeof(counter), total_stations());
+  f->label(f->canvas, 6, counter, f->muted, 1);
+  // Language chip in the header corner replaces the old "FA "/"DE " text prefix on the name —
+  // one glance at the color says the language, so the name line stays short enough to run large.
+  f->fill_rect(f->canvas, f->width - 12, 6, 6, 6, lang_color(station_lang(station)));
   f->line(f->canvas, 8, 20, f->width - 8, 20, 1, f->accent);
-  // "FA Radio Farda": the language tag rides in front of the name rather than on its own line —
-  // screen's too small to spare a row for it, and it stays right next to what it describes.
-  int np = 0;
-  append(name, &np, sizeof(name), station_lang(station));
-  append(name, &np, sizeof(name), " ");
-  append(name, &np, sizeof(name), station_name(station));
+  const char *name = station_name(station);
   const int name_scale = f->text_width(name, 2) <= f->width - 8 ? 2 : 1;
-  f->label(f->canvas, name_scale == 2 ? 30 : 35, name, f->text, name_scale);
-  f->label(f->canvas, 49, status, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
-  side_meters(f, state == 3);
+  f->label(f->canvas, name_scale == 2 ? 34 : 38, name, f->text, name_scale);
   if (state == 3) {
-    f->ring(f->canvas, center, 74, 15, 2, f->muted);
-    f->line(f->canvas, center - 4, 67, center + 6, 74, 2, f->accent);
-    f->line(f->canvas, center + 6, 74, center - 4, 81, 2, f->accent);
-    f->line(f->canvas, center - 4, 81, center - 4, 67, 2, f->accent);
+    uint8_t measured[8];
+    const int fresh = f->radio_spectrum(measured, 8);
+    const int bar_width = 6, gap = 4, left = center - (8 * bar_width + 7 * gap) / 2;
+    for (int i = 0; i < 8; ++i) {
+      const int target = fresh == 8 ? measured[i] : 0;
+      int current = displayed_bands[i];
+      if (target > current) {
+        int step = (target - current + 1) / 2;
+        current += step > 0 ? step : 1;
+      } else if (target < current) {
+        int step = (current - target + 5) / 6;
+        current -= step > 0 ? step : 1;
+      }
+      displayed_bands[i] = (uint8_t)current;
+      const int height = current * 30 / 100;
+      if (height > 0) f->fill_rect(f->canvas, left + i * (bar_width + gap), 90 - height,
+                                   bar_width, height, f->accent);
+    }
   } else if (state == 1 || state == 2 || reconnecting) {
+    clear_bands(displayed_bands);
     loading_ring(f, center, 74);
   } else if (state == 4) {
+    clear_bands(displayed_bands);
     f->ring(f->canvas, center, 74, 15, 2, 0xf800);
     f->label(f->canvas, 70, "!", 0xf800, 1);
+  } else {
+    clear_bands(displayed_bands);
   }
-  int ip = 0;
-  append(info, &ip, sizeof(info), "VOL ");
-  append_int(info, &ip, sizeof(info), f->volume);
-  append(info, &ip, sizeof(info), "%");
+  // Status and bitrate share one line instead of two — "Playing  128k" reads as a single fact.
+  int lp = 0;
+  append(line2, &lp, sizeof(line2), status);
   if (kbps > 0) {
-    append(info, &ip, sizeof(info), "  ");
-    append_int(info, &ip, sizeof(info), kbps);
-    append(info, &ip, sizeof(info), "k");
+    append(line2, &lp, sizeof(line2), "  ");
+    append_int(line2, &lp, sizeof(line2), kbps);
+    append(line2, &lp, sizeof(line2), "k");
   }
-  f->label(f->canvas, f->height - 20, info, f->text, 1);
-  f->label(f->canvas, f->height - 9,
-           (f->frame_ms / 4000) % 2 ? "Hold +/-: volume" : "2x +/-: station", f->muted, 1);
+  f->label(f->canvas, 98, line2, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
+  // One rotating bottom line instead of two fixed rows: volume, then each gesture hint in turn.
+  const int cycle = (int)(f->frame_ms / 3000) % 3;
+  if (cycle == 0) {
+    int ip = 0;
+    append(info, &ip, sizeof(info), "VOL ");
+    append_int(info, &ip, sizeof(info), f->volume);
+    append(info, &ip, sizeof(info), "%");
+    f->label(f->canvas, f->height - 12, info, f->text, 1);
+  } else if (cycle == 1) {
+    f->label(f->canvas, f->height - 12, "2x +/-: station", f->muted, 1);
+  } else {
+    f->label(f->canvas, f->height - 12, "Hold +/-: volume", f->muted, 1);
+  }
   return 0;
 }

@@ -6,7 +6,9 @@ import { ConfirmDialog, ErrorText, Sheet, ToastBanner, accentButton, inputClass,
 import {
   api,
   availableUpdate,
+  batteryTrend,
   boardName,
+  compareVersions,
   deviceName,
   isOtaActive,
   recentSamples,
@@ -112,10 +114,13 @@ export function DeviceDetails({
 
 function StatusPanel({ device }: { device: PublicDevice }) {
   const recent = recentSamples(device.samples, 6);
+  const trend = batteryTrend(device);
+  const powerStatus = device.charging ? "Charging" : trend?.direction === -1 ? "Battery decreasing" : "Not charging";
   return (
     <div className="space-y-4">
       <dl className="grid grid-cols-2 gap-2 text-sm">
-        <Info label="Battery" value={device.battery >= 0 ? `${device.battery}%${device.batteryMv > 0 ? ` · ${(device.batteryMv / 1000).toFixed(3)} V` : ""}${device.charging ? " · charging" : ""}` : "—"} />
+        <Info label="Battery" value={device.battery >= 0 ? `${device.battery}%${device.batteryMv > 0 ? ` · ${(device.batteryMv / 1000).toFixed(3)} V` : ""}` : "—"} />
+        <Info label="Power status" value={device.battery >= 0 ? powerStatus : "Unavailable"} />
         <Info label="Signal" value={signalLabel(device.rssi)} />
         <Info label="Uptime" value={device.uptime ? uptime(device.uptime) : "—"} />
         <Info label="Free memory" value={device.heap ? `${Math.round(device.heap / 1024)} KB` : "—"} />
@@ -124,6 +129,13 @@ function StatusPanel({ device }: { device: PublicDevice }) {
         <Info label="SD card" value={!device.sdCard ? "Not reported" : device.sdCard.mounted ? `${formatBytes(device.sdCard.free)} free` : "No card"} />
         <Info label="SD capacity" value={device.sdCard?.mounted ? `${formatBytes(device.sdCard.total)} · ${Math.round(((device.sdCard.total - device.sdCard.free) / Math.max(1, device.sdCard.total)) * 100)}% used` : "—"} />
       </dl>
+      {trend && (
+        <div className="rounded-xl bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
+          <span className="font-medium">Change over {trend.minutes} min: </span>
+          <span className="tabular-nums">{trend.percent > 0 ? "+" : ""}{trend.percent}%{trend.millivolts !== null ? ` · ${trend.millivolts > 0 ? "+" : ""}${trend.millivolts} mV` : ""}</span>
+        </div>
+      )}
+      <p className="text-xs text-zinc-500">The board reports active charging. When charging stops, the voltage trend shows whether the battery is falling; this board cannot directly detect a connected USB cable.</p>
       {device.sdCard?.mounted && (
         <div aria-label="SD card usage" className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
           <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.min(100, ((device.sdCard.total - device.sdCard.free) / Math.max(1, device.sdCard.total)) * 100)}%` }} />
@@ -134,8 +146,8 @@ function StatusPanel({ device }: { device: PublicDevice }) {
         <p className="text-sm text-zinc-500">Charts appear after a few minutes online.</p>
       ) : (
         <div className="space-y-3">
-          <Sparkline label="Battery" unit="%" samples={recent} pick={(s) => (s.battery >= 0 ? s.battery : null)} min={0} max={100} />
-          <Sparkline label="Battery voltage" unit=" V" samples={recent} pick={(s) => (s.batteryMv ? s.batteryMv / 1000 : null)} />
+          <Sparkline label="Battery" unit="%" samples={recent} pick={(s) => (s.battery >= 0 ? s.battery : null)} showChargeEvents />
+          <Sparkline label="Battery voltage" unit=" V" samples={recent} pick={(s) => (s.batteryMv ? s.batteryMv / 1000 : null)} showChargeEvents />
           <Sparkline label="Signal" unit=" dBm" samples={recent} pick={(s) => s.rssi || null} min={-95} max={-30} />
           <Sparkline label="Free memory" unit=" KB" samples={recent} pick={(s) => (s.heap ? Math.round(s.heap / 1024) : null)} />
         </div>
@@ -161,6 +173,7 @@ function Sparkline({
   pick,
   min,
   max,
+  showChargeEvents = false,
 }: {
   label: string;
   unit: string;
@@ -168,8 +181,9 @@ function Sparkline({
   pick: (sample: DeviceSample) => number | null;
   min?: number;
   max?: number;
+  showChargeEvents?: boolean;
 }) {
-  const points = samples.map((s) => ({ t: s.t, v: pick(s) })).filter((p): p is { t: number; v: number } => p.v !== null);
+  const points = samples.map((s) => ({ t: s.t, v: pick(s), charging: s.charging })).filter((p): p is { t: number; v: number; charging: boolean | undefined } => p.v !== null);
   if (points.length < 2) return null;
   const values = points.map((p) => p.v);
   const lo = min ?? Math.min(...values);
@@ -178,12 +192,12 @@ function Sparkline({
   const span = Math.max(1, points.at(-1)!.t - t0);
   const width = 300;
   const height = 48;
+  const coordinates = points.map((p) => ({
+    x: ((p.t - t0) / span) * width,
+    y: height - 2 - ((Math.min(hi, Math.max(lo, p.v)) - lo) / (hi - lo)) * (height - 4),
+  }));
   const path = points
-    .map((p, i) => {
-      const x = ((p.t - t0) / span) * width;
-      const y = height - 2 - ((Math.min(hi, Math.max(lo, p.v)) - lo) / (hi - lo)) * (height - 4);
-      return `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
+    .map((_, i) => `${i ? "L" : "M"}${coordinates[i].x.toFixed(1)},${coordinates[i].y.toFixed(1)}`)
     .join("");
   const last = values.at(-1)!;
 
@@ -203,7 +217,11 @@ function Sparkline({
       </figcaption>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="mt-2 h-12 w-full text-blue-500" role="img" aria-label={`${label} trend, now ${last}${unit}`}>
         <path d={path} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+        {showChargeEvents && points.map((point, i) => i > 0 && point.charging !== undefined && points[i - 1].charging !== undefined && point.charging !== points[i - 1].charging ? (
+          <circle key={point.t} cx={coordinates[i].x} cy={coordinates[i].y} r="3.5" fill={point.charging ? "#10b981" : "#f59e0b"} />
+        ) : null)}
       </svg>
+      {showChargeEvents && <p className="mt-1 text-[10px] text-zinc-500"><span className="text-emerald-500">●</span> Charging started <span className="ml-2 text-amber-500">●</span> Charging stopped</p>}
     </figure>
   );
 }
@@ -363,6 +381,10 @@ function FirmwarePanel({
   const update = availableUpdate(device);
   const ota = device.ota;
   const active = isOtaActive(ota);
+  const otaSent = device.commands.findLast((command) => command.type === "ota")?.status === "sent";
+  const oldRadioUpdater = compareVersions(device.firmware, "1.1.24") < 0;
+  const needsRadioStop = oldRadioUpdater && device.activeProject === "radio";
+  const waitingForRadioMemory = oldRadioUpdater && device.activeProject !== "radio" && device.heap > 0 && device.heap < 32 * 1024;
 
   return (
     <div className="space-y-4">
@@ -374,20 +396,24 @@ function FirmwarePanel({
       {active && ota && (
         <div className="space-y-2" role="status" aria-live="polite">
           <div className="flex justify-between text-sm">
-            <span className="font-medium">{ota.state === "queued" ? "Waiting for device…" : `Installing v${ota.version}`}</span>
-            <span className="tabular-nums text-zinc-500">{ota.progress}%</span>
+            <span className="font-medium">{ota.state === "queued" ? otaSent ? "Update sent; waiting for board result…" : "Waiting for device…" : `Installing v${ota.version}`}</span>
+            <span className="tabular-nums text-zinc-500">{ota.progress > 0 ? `${ota.progress}%` : "—"}</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-            <div className="h-full rounded-full bg-blue-500 transition-[width] duration-300" style={{ width: `${ota.progress}%` }} />
+          <div className={`h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800 ${ota.progress === 0 ? "animate-pulse" : ""}`}>
+            {ota.progress > 0 && <div className="h-full rounded-full bg-blue-500 transition-[width] duration-300" style={{ width: `${ota.progress}%` }} />}
           </div>
-          <p className="text-xs text-zinc-500">Keep the device powered. It restarts when the update is installed.</p>
+          <p className="text-xs text-zinc-500">The board reports the result after the download. Keep it powered.</p>
         </div>
       )}
       {ota?.state === "failed" && !active && <ErrorText>Update failed: {ota.error || "unknown error"}</ErrorText>}
-      {ota?.state === "done" && !update && <p className="text-sm text-emerald-600 dark:text-emerald-400">✓ v{ota.version} installed</p>}
+      {ota && (ota.state === "queued" || ota.state === "downloading") && !active && <ErrorText>The device did not confirm this update. Check its connection, then retry.</ErrorText>}
+      {ota?.state === "done" && ota.version === device.firmware && <p className="text-sm text-emerald-600 dark:text-emerald-400">✓ v{ota.version} installed</p>}
+
+      {needsRadioStop && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">This firmware may time out while stopping Radio for an update. In Projects, choose Default display → Restore default display, wait for the board to confirm, then return here to update. You can load Radio again afterward.</p>}
+      {waitingForRadioMemory && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Waiting for Radio to release memory. Keep this page open; the update button will become available when the board reports enough free memory.</p>}
 
       {update && !active && (
-        <Button onClick={() => onUpdate(update.version)} disabled={!device.online || busy !== null} className={accentButton + " h-11 w-full"}>
+        <Button onClick={() => onUpdate(update.version)} disabled={!device.online || busy !== null || needsRadioStop || waitingForRadioMemory} className={accentButton + " h-11 w-full"}>
           Update to v{update.version} over Wi-Fi
         </Button>
       )}

@@ -2,6 +2,7 @@
 
 import { Button } from "@headlessui/react";
 import { useEffect, useState } from "react";
+import { RadioProjectSettings } from "@/components/RadioProjectSettings";
 import { WeatherProjectSettings } from "@/components/WeatherProjectSettings";
 import { Slider, Toggle, inputClass } from "@/components/ui";
 import { TIME_ZONES } from "@/lib/device-settings";
@@ -9,6 +10,9 @@ import type { ProjectConfig, ProjectDefinition, ProjectLocation, ProjectSettingV
 
 export function ProjectSettingsForm({ project, value, disabled, onChange }: { project: ProjectDefinition; value: ProjectConfig; disabled: boolean; onChange: (value: ProjectConfig) => void }) {
   const set = (key: string, next: ProjectSettingValue) => onChange({ ...value, [key]: next });
+  // Radio's 9 settings are 3 repeated url/name/lang triplets; a generic per-field list can't
+  // group them into station cards or add stream-test/validation, so it gets its own renderer.
+  if (project.id === "radio") return <fieldset disabled={disabled}><RadioProjectSettings project={project} value={value} onChange={onChange} /></fieldset>;
   return <fieldset disabled={disabled} className="space-y-4">
     {project.settings.map((setting) => {
       const current = value[setting.key] ?? setting.default;

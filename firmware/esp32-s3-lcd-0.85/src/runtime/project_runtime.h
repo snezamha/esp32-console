@@ -42,6 +42,7 @@ class ProjectRuntime {
   void RefreshSd();
  private:
   static void DownloadTask(void* arg);
+  void LaunchDownload();
   void Log(const std::string& message, bool error = false);
   struct Metadata { std::string id, name, version, board; int abi = 0; };
   bool Inspect(const std::vector<uint8_t>& bytes, Metadata& metadata);
@@ -84,4 +85,10 @@ class ProjectRuntime {
   size_t expected_size_ = 0;
   uint32_t first_frame_at_ = 0;
   std::vector<uint8_t> downloaded_;
+  std::string radio_url_before_install_;
+  bool waiting_for_radio_ = false;
+  uint32_t radio_stop_started_ms_ = 0;
+  uint32_t radio_stopped_at_ms_ = 0;
+  uint32_t resume_radio_at_ms_ = 0;
+  uint32_t download_finished_at_ms_ = 0;
 };

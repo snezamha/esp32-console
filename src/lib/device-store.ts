@@ -54,6 +54,13 @@ function sleep(ms: number, signal: AbortSignal) {
 function toPublic(row: DeviceRow): PublicDevice {
   const pending = row.pending as PendingEdits;
   const settings = effectiveSettings(row);
+  const commands = expireProjectCommands(row.commands as DeviceCommand[]);
+  const storedOta = row.ota as OtaStatus | null;
+  const lastOtaCommand = commands.findLast((command) => command.type === "ota");
+  const ota = storedOta && lastOtaCommand?.status === "failed" &&
+      (storedOta.state === "queued" || storedOta.state === "downloading")
+    ? { ...storedOta, state: "failed" as const, error: lastOtaCommand.result || "The device did not confirm the update.", updatedAt: lastOtaCommand.updatedAt }
+    : storedOta;
   return {
     id: row.id,
     name: row.name,
@@ -80,11 +87,11 @@ function toPublic(row: DeviceRow): PublicDevice {
     projectSafeMode: (row.reported as Record<string, unknown>)._project_safe === 1,
     sdCard: ((row.reported as Record<string, unknown>)._sd as SdCardStatus | undefined) ?? null,
     settingsReported: row.settingsReported,
-    commands: expireProjectCommands(row.commands as DeviceCommand[]).slice(-10).map((entry) => { const command = { ...entry }; delete command.fileId; return command; }),
+    commands: commands.slice(-10).map((entry) => { const command = { ...entry }; delete command.fileId; return command; }),
     tests: row.tests as Record<string, TestResult>,
     testsUpdatedAt: row.testsUpdatedAt?.getTime() ?? 0,
     samples: row.samples as DeviceSample[],
-    ota: row.ota as OtaStatus | null,
+    ota,
     networks: row.networks as string[],
     online: Date.now() - row.lastSeen.getTime() < ONLINE_WINDOW_MS,
     syncing: Object.keys(pending).length > 0,
@@ -273,8 +280,9 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
 
   const samples = row.samples as DeviceSample[];
   const last = samples.at(-1);
-  if (!last || now.getTime() - last.t >= SAMPLE_INTERVAL_MS) {
-    const next = [...samples, { t: now.getTime(), battery: report.battery, batteryMv: report.batteryMv, rssi: report.rssi, heap: report.heap }].slice(-MAX_SAMPLES);
+  // Keep a point at a charging transition even when it occurs between minute samples.
+  if (!last || now.getTime() - last.t >= SAMPLE_INTERVAL_MS || last.charging !== report.charging) {
+    const next = [...samples, { t: now.getTime(), battery: report.battery, batteryMv: report.batteryMv, charging: report.charging, rssi: report.rssi, heap: report.heap }].slice(-MAX_SAMPLES);
     data.samples = json(next);
   }
   return data;

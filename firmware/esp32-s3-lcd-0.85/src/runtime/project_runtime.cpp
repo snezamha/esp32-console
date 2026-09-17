@@ -754,6 +754,8 @@ std::string ProjectRuntime::Start(const std::string& command_id, const std::stri
   if (SdFiles::Get().Busy()) return "fail|An SD card operation is running";
   const auto id = ConsoleClient::FormValue(arg, "id");
   if (id == "none") {
+    resume_radio_at_ms_ = 0;
+    radio_url_before_install_.clear();
     { Settings s("project", true); s.SetString("active", "0|none"); }
     ResetProjectIo();
     if (loaded_) esp_elf_deinit(&elf_);
@@ -789,12 +791,29 @@ std::string ProjectRuntime::Start(const std::string& command_id, const std::stri
   Log("Opening project download connection; expected " + std::to_string(expected_size_) + " bytes.");
   if (assets_bytes_) Log("SD card ready: " + Megabytes(sd_free_) + " free; project files need " + Megabytes(assets_bytes_) + ".");
   error_.clear(); downloaded_.clear(); progress_ = 0; done_ = false; busy_ = true;
-  if (xTaskCreatePinnedToCore(DownloadTask, "project_load", 12288, this, 1, nullptr, 0) != pdPASS) {
-    busy_ = false; stage_ = 7;
-    { Settings s("project", true); s.SetString("pending", ""); }
-    return "fail|No memory for project download";
+  download_finished_at_ms_ = 0;
+  const std::string playing_url = RadioStream::Get().CurrentUrl();
+  if (!playing_url.empty()) {
+    radio_url_before_install_ = playing_url;
+    RadioStream::Get().Stop();
+    Log("Pausing radio to free memory for the project download.");
   }
+  resume_radio_at_ms_ = 0;
+  if (RadioStream::Get().WorkerRunning()) {
+    waiting_for_radio_ = true;
+    radio_stop_started_ms_ = millis();
+    radio_stopped_at_ms_ = 0;
+    return "";
+  }
+  LaunchDownload();
   return "";
+}
+
+void ProjectRuntime::LaunchDownload() {
+  if (xTaskCreatePinnedToCore(DownloadTask, "project_load", 12288, this, 1, nullptr, 0) != pdPASS) {
+    error_ = "No memory for project download";
+    done_ = true;
+  }
 }
 
 // One GET into `sink`. `expected` 0 accepts any declared Content-Length; `limit_ms` 0 means no total time limit.
@@ -956,11 +975,42 @@ std::string ProjectRuntime::Cancel(const std::string& stop_id, const std::string
 
 std::vector<std::string> ProjectRuntime::Loop() {
   std::vector<std::string> acks;
+  const uint32_t now = millis();
+  if (waiting_for_radio_) {
+    if (cancel_) {
+      waiting_for_radio_ = false;
+      done_ = true;
+    } else if (!RadioStream::Get().WorkerRunning()) {
+      if (!radio_stopped_at_ms_) radio_stopped_at_ms_ = now;
+      // The idle task frees the old worker's stack after it exits.
+      if (now - radio_stopped_at_ms_ >= 500) {
+        waiting_for_radio_ = false;
+        LaunchDownload();
+      }
+    } else if (now - radio_stop_started_ms_ > 60000) {
+      waiting_for_radio_ = false;
+      error_ = "Radio did not release memory";
+      done_ = true;
+    }
+  }
+  if (resume_radio_at_ms_ && !Busy() && static_cast<int32_t>(now - resume_radio_at_ms_) >= 0) {
+    resume_radio_at_ms_ = 0;
+    if (!radio_url_before_install_.empty()) RadioStream::Get().Start(radio_url_before_install_.c_str());
+    radio_url_before_install_.clear();
+  }
   if (ack_ready_) {
     ack_ready_ = false;
     acks.push_back(command_id_ + (ack_ok_ ? "|ok|Project installed and first frame verified" : "|fail|" + error_));
   }
-  if (!done_.exchange(false)) return acks;
+  if (!done_) return acks;
+  if (!download_finished_at_ms_) {
+    download_finished_at_ms_ = now;
+    return acks;
+  }
+  // Let the idle task reclaim the download worker's stack before ELF relocation.
+  if (now - download_finished_at_ms_ < 500) return acks;
+  done_ = false;
+  download_finished_at_ms_ = 0;
   if (cancel_) error_ = "Cancelled by user";
   if (error_.empty() && !Activate(downloaded_, {target_id_, "", target_version_, kBoardId, DISPLAY_PROJECT_ABI})) error_ = "Project identity, ABI, ELF or flash validation failed";
   downloaded_.clear(); busy_ = false;
@@ -968,6 +1018,9 @@ std::vector<std::string> ProjectRuntime::Loop() {
     stage_ = cancel_ ? 8 : 7; Log(error_, !cancel_);
     { Settings s("project", true); s.SetString("pending", ""); }
     acks.push_back(command_id_ + "|fail|" + error_);
+    if (!radio_url_before_install_.empty()) resume_radio_at_ms_ = now + 1000;
+  } else {
+    radio_url_before_install_.clear();
   }
   if (!stop_id_.empty()) { acks.push_back(stop_id_ + "|ok|Transfer stopped"); stop_id_.clear(); }
   return acks;
@@ -1054,6 +1107,7 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
   frame.radio_start = [](const char* url) { return RadioStream::Get().Start(url); };
   frame.radio_stop = []() { RadioStream::Get().Stop(); };
   frame.radio_status = [](char* text, uint32_t capacity, int* bitrate) { return RadioStream::Get().Status(text, capacity, bitrate); };
+  frame.radio_spectrum = [](uint8_t* levels, uint32_t capacity) { return RadioStream::Get().Spectrum(levels, capacity); };
   const auto saved = c.GetClip(); c.IntersectClip(x,y,w,h);
   char* argv[] = {reinterpret_cast<char*>(&frame)};
   const int result = esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);

@@ -286,6 +286,9 @@ function InstallationCard({
       {loading && !device.online && <p role="status" className="text-xs text-amber-600">Board offline. Reconnect its power and Wi-Fi. You can cancel this request; waiting is limited.</p>}
       <div role="log" aria-label="Installation logs" aria-live="polite" className="max-h-64 overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-xs text-zinc-300">{logs.map((log) => <p key={log.seq} className={log.level === "error" ? "text-red-400" : ""}>{new Date(log.at).toLocaleTimeString()} · {log.message}</p>)}<div ref={logEnd} /></div>
       <ErrorText>{installation.status === "failed" && transfer?.phase !== "cancelled" ? installation.result : null}</ErrorText>
+      {installation.status === "failed" && installation.result === "No memory for project download" && device.firmware.localeCompare("1.1.24", undefined, { numeric: true }) < 0 && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">The active radio stream is using the memory needed to start this download. Update the base firmware in Devices → Details → Firmware, then retry.</p>
+      )}
       <div className="flex gap-2">
         {projectPending(installation) && <Button disabled={busy} onClick={onStop} className={accentButton + " h-9 px-4"}>Stop installation</Button>}
         {!projectPending(installation) && installation.status === "failed" && <Button disabled={disabled} onClick={onRetry} className={accentButton + " h-9 px-4"}>Retry</Button>}

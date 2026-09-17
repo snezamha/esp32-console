@@ -14,6 +14,7 @@
 #include "../hw_test.h"
 #include "heap_guard.h"
 #include "network.h"
+#include "radio_spectrum.h"
 
 extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
@@ -57,6 +58,8 @@ int RadioStream::Start(const char* raw) {
   state_ = 1;
   bitrate_ = 0;
   message_ = "Connecting";
+  spectrum_.fill(0);
+  spectrum_at_ms_ = 0;
   if (!task_running_) {
     task_running_ = true;
     // Core 1, not 0: every other network task (console poll, mDNS, OTA, Wi-Fi/BLE scans) is
@@ -85,6 +88,39 @@ void RadioStream::Stop() {
   state_ = 0;
   bitrate_ = 0;
   message_.clear();
+  spectrum_.fill(0);
+  spectrum_at_ms_ = 0;
+}
+
+std::string RadioStream::CurrentUrl() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return url_;
+}
+
+bool RadioStream::WorkerRunning() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return task_running_;
+}
+
+int RadioStream::Spectrum(uint8_t* levels, uint32_t capacity) {
+  if (!levels || capacity < spectrum_.size()) return -1;
+  std::lock_guard<std::mutex> lock(mutex_);
+  const bool fresh = state_ == 3 && spectrum_at_ms_ && millis() - spectrum_at_ms_ < 500;
+  for (size_t i = 0; i < spectrum_.size(); ++i) levels[i] = fresh ? spectrum_[i] : 0;
+  return fresh ? static_cast<int>(spectrum_.size()) : 0;
+}
+
+void RadioStream::UpdateSpectrum(const int16_t* pcm, int frames, int channels, int sample_rate, uint32_t generation) {
+  const uint32_t now = millis();
+  if (now - last_spectrum_compute_ms_ < 75) return;
+  last_spectrum_compute_ms_ = now;
+  uint8_t levels[radio_spectrum::kBands];
+  radio_spectrum::Analyze(pcm, frames, channels, sample_rate,
+                          Board::GetInstance().GetAudioCodec()->output_volume(), levels);
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (generation != generation_) return;
+  for (size_t i = 0; i < spectrum_.size(); ++i) spectrum_[i] = levels[i];
+  spectrum_at_ms_ = now;
 }
 
 int RadioStream::Status(char* text, uint32_t capacity, int* bitrate_kbps) {
@@ -123,9 +159,13 @@ void RadioStream::Task(void* arg) {
       url = self->url_;
     }
     if (url.empty()) {
-      handled = generation;
-      vTaskDelay(pdMS_TO_TICKS(100));
-      continue;
+      // Give the stack and decoder buffers back before a firmware download starts.
+      std::lock_guard<std::mutex> lock(self->mutex_);
+      if (self->url_.empty()) {
+        self->task_running_ = false;
+        break;
+      }
+      continue;  // A new station was selected while the old one was closing.
     }
     if (generation != handled) {
       handled = generation;
@@ -139,6 +179,7 @@ void RadioStream::Task(void* arg) {
     }
     for (int i = 0; i < 20 && generation == self->generation_; ++i) vTaskDelay(pdMS_TO_TICKS(100));
   }
+  vTaskDelete(nullptr);
 }
 
 void RadioStream::Run(const std::string& url, uint32_t generation) {
@@ -172,6 +213,10 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
   LogStage("http_begin");
   const int code = http.GET();
   LogStage("http_get", code);
+  if (generation != generation_) {
+    http.end();
+    return;
+  }
   if (code != 200) {
     SetStatus(generation, 4, code < 0 ? "Connection failed" : "Station unavailable");
     http.end();
@@ -181,6 +226,10 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
   auto* codec = Board::GetInstance().GetAudioCodec();
   if (!codec->started()) codec->Start();
   LogStage("codec_start", codec->es8311_found());
+  if (generation != generation_) {
+    http.end();
+    return;
+  }
   if (!codec->es8311_found()) {
     SetStatus(generation, 4, "Speaker unavailable");
     http.end();
@@ -249,6 +298,7 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
     if (generation != generation_) break;
     if ((info.nChans != 1 && info.nChans != 2) || info.outputSamps < 1 ||
         info.outputSamps > kMaxOutputSamples || info.samprate < 8000 || info.samprate > 48000) continue;
+    UpdateSpectrum(output.get(), info.outputSamps / info.nChans, info.nChans, info.samprate, generation);
     if (codec->sample_rate() != info.samprate && !codec->SetSampleRate(info.samprate)) {
       SetStatus(generation, 4, "Audio clock failed");
       break;

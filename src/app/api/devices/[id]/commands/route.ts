@@ -2,7 +2,7 @@ import { getUser, unauthorized } from "@/lib/auth";
 import { BOARDS } from "@/lib/boards";
 import { deleteCommandHistory, listDevices, queueCommand, stopProject, retryProjectFile } from "@/lib/device-store";
 import { projectPackage } from "@/lib/projects";
-import { isOtaActive } from "@/lib/device-client";
+import { compareVersions, isOtaActive } from "@/lib/device-client";
 import type { CommandType } from "@/lib/device-types";
 
 const TEST_KEYS = ["all", "battery", "memory", "buttons", "led", "sd", "codec", "mic", "speaker", "wifi", "ble"];
@@ -82,6 +82,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/devices/[id
       arg = body.test;
       break;
     case "ota": {
+      if (device.activeProject === "radio" && device.heap > 0 && device.heap < 32 * 1024 && compareVersions(device.firmware, "1.1.22") < 0) {
+        return bad("Radio is using too much memory for this firmware's Wi-Fi updater. Restore the Default display in Projects, then retry the update.");
+      }
       const board = BOARDS.find((b) => b.id === device.board);
       const version = board?.versions.find((v) => v.version === body.version);
       if (!board || !version?.app) return bad("This version has no OTA image. Rebuild it with pnpm firmware:build.");
