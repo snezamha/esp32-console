@@ -4,7 +4,7 @@ struct Station { const char *id, *name, *lang, *url; };
 static const struct Station stations[] = {
   {"farda", "Radio Farda", "FA", "https://stream.radiojar.com/cp13r2cpn3quv"},
   {"navahang", "Navahang", "FA", "https://navairan.com/;stream.nsv"},
-  {"bbc", "BBC World Service", "EN", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
+  {"bbc", "BBC World Svc", "EN", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
   {"dlf", "Deutschlandfunk", "DE", "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3"},
   {"ndrinfo", "NDR Info", "DE", "https://icecast.ndr.de/ndr/ndrinfo/live/mp3/128/stream.mp3"},
   {"1live", "1LIVE", "DE", "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
@@ -143,23 +143,91 @@ static void loading_ring(struct ProjectFrame *f, int x, int y) {
   }
 }
 
-// Small color chip next to the header so a station's language is recognizable at a glance
-// while tapping through blind, without needing a second color slot inside label().
-static uint16_t lang_color(const char *lang) {
-  if (same(lang, "FA")) return 0x07ff;
-  if (same(lang, "EN")) return 0x07e0;
-  if (same(lang, "DE")) return 0xffe0;
-  if (same(lang, "AR")) return 0xf81f;
-  if (same(lang, "TR")) return 0xfd20;
-  if (same(lang, "FR")) return 0x001f;
-  if (same(lang, "ES")) return 0xfea0;
-  if (same(lang, "RU")) return 0xf800;
-  return 0xffff;
+// Tiny 9x6 flag beside the station name; custom stations use their selected language.
+static void draw_flag(struct ProjectFrame *f, int x, int y, const char *lang) {
+  if (same(lang, "FA")) {
+    f->fill_rect(f->canvas, x, y, 9, 2, 0x07e0);
+    f->fill_rect(f->canvas, x, y + 2, 9, 2, 0xffff);
+    f->fill_rect(f->canvas, x, y + 4, 9, 2, 0xf800);
+    f->fill_rect(f->canvas, x + 4, y + 2, 1, 2, 0xf800);
+  } else if (same(lang, "EN")) {
+    f->fill_rect(f->canvas, x, y, 9, 6, 0x0010);
+    f->line(f->canvas, x, y, x + 8, y + 5, 1, 0xffff);
+    f->line(f->canvas, x + 8, y, x, y + 5, 1, 0xffff);
+    f->fill_rect(f->canvas, x + 3, y, 3, 6, 0xffff);
+    f->fill_rect(f->canvas, x, y + 2, 9, 2, 0xffff);
+    f->fill_rect(f->canvas, x + 4, y, 1, 6, 0xf800);
+    f->fill_rect(f->canvas, x, y + 3, 9, 1, 0xf800);
+  } else if (same(lang, "DE")) {
+    f->fill_rect(f->canvas, x, y, 9, 2, 0x0000);
+    f->fill_rect(f->canvas, x, y + 2, 9, 2, 0xf800);
+    f->fill_rect(f->canvas, x, y + 4, 9, 2, 0xffe0);
+  } else if (same(lang, "FR")) {
+    f->fill_rect(f->canvas, x, y, 3, 6, 0x001f);
+    f->fill_rect(f->canvas, x + 3, y, 3, 6, 0xffff);
+    f->fill_rect(f->canvas, x + 6, y, 3, 6, 0xf800);
+  } else if (same(lang, "ES")) {
+    f->fill_rect(f->canvas, x, y, 9, 2, 0xf800);
+    f->fill_rect(f->canvas, x, y + 2, 9, 2, 0xffe0);
+    f->fill_rect(f->canvas, x, y + 4, 9, 2, 0xf800);
+  } else if (same(lang, "RU")) {
+    f->fill_rect(f->canvas, x, y, 9, 2, 0xffff);
+    f->fill_rect(f->canvas, x, y + 2, 9, 2, 0x001f);
+    f->fill_rect(f->canvas, x, y + 4, 9, 2, 0xf800);
+  } else if (same(lang, "TR")) {
+    f->fill_rect(f->canvas, x, y, 9, 6, 0xf800);
+    f->circle(f->canvas, x + 3, y + 3, 2, 0xffff);
+    f->circle(f->canvas, x + 4, y + 2, 2, 0xf800);
+    f->fill_rect(f->canvas, x + 7, y + 2, 1, 1, 0xffff);
+  } else if (same(lang, "AR")) {
+    f->fill_rect(f->canvas, x, y, 9, 6, 0x07e0);
+    f->fill_rect(f->canvas, x + 2, y + 3, 5, 1, 0xffff);
+  } else {
+    f->fill_rect(f->canvas, x, y, 9, 6, f->muted);
+  }
+}
+
+static void draw_percent(struct ProjectFrame *f, int value) {
+  // Three-by-five digits keep even "100%" centered below the 4-pixel volume track.
+  static const uint8_t glyphs[11][5] = {
+    {7, 5, 5, 5, 7}, {2, 6, 2, 2, 7}, {7, 1, 7, 4, 7}, {7, 1, 7, 1, 7},
+    {5, 5, 7, 1, 1}, {7, 4, 7, 1, 7}, {7, 4, 7, 5, 7}, {7, 1, 1, 1, 1},
+    {7, 5, 7, 5, 7}, {7, 5, 7, 1, 7}, {5, 1, 2, 4, 5},
+  };
+  char text[8];
+  int length = 0;
+  append_int(text, &length, sizeof(text), value);
+  append(text, &length, sizeof(text), "%");
+  const int start_x = f->width - 8 - (length * 4 - 1) / 2;
+  for (int i = 0; i < length; ++i) {
+    const int glyph = text[i] == '%' ? 10 : text[i] - '0';
+    for (int row = 0; row < 5; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        if (glyphs[glyph][row] & (4 >> col))
+          f->fill_rect(f->canvas, start_x + i * 4 + col, 98 + row, 1, 1, f->text);
+      }
+    }
+  }
 }
 
 static void clear_bands(uint8_t *bands) {
   volatile uint8_t *out = bands;
   for (int i = 0; i < 8; ++i) out[i] = 0;
+}
+
+// The host's label() is always centered across the entire 128-pixel display. Keep text within
+// the 96-pixel center column so it cannot run into the volume rail on the right.
+static void fit_label(char *out, const char *text, int max_chars) {
+  int length = 0;
+  while (text[length] && length < max_chars) {
+    out[length] = text[length];
+    ++length;
+  }
+  if (text[length] && length >= 3) {
+    out[length - 2] = '.';
+    out[length - 1] = '.';
+  }
+  out[length] = 0;
 }
 
 // Persists the last played station index in the project's private SD area so the radio resumes
@@ -231,31 +299,43 @@ int app_main(int argc, char **argv) {
     }
   }
 
-  char status[40], counter[8], line2[48], info[24];
+  char status[40], counter[8], line2[48];
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
   const int reconnecting = state == 4 && same(status, "Reconnecting");
-  const int center = f->width / 2;
+  const int center = (f->width - 14) / 2;
   static uint8_t displayed_bands[8] = {0};
 
-  // Just the position ("3/9"), not the whole "RADIO 3/9" — the icon and name already say
-  // it's a radio, and one screen this small can't spare width on a word that adds no data.
+  // Each element has its own space: station index, name/flag, status, spectrum, and volume.
   int cp = 0;
   append_int(counter, &cp, sizeof(counter), station + 1);
   append(counter, &cp, sizeof(counter), "/");
   append_int(counter, &cp, sizeof(counter), total_stations());
-  f->label(f->canvas, 6, counter, f->muted, 1);
-  // Language chip in the header corner replaces the old "FA "/"DE " text prefix on the name —
-  // one glance at the color says the language, so the name line stays short enough to run large.
-  f->fill_rect(f->canvas, f->width - 12, 6, 6, 6, lang_color(station_lang(station)));
-  f->line(f->canvas, 8, 20, f->width - 8, 20, 1, f->accent);
+  f->label(f->canvas, 5, counter, f->muted, 1);
   const char *name = station_name(station);
-  const int name_scale = f->text_width(name, 2) <= f->width - 8 ? 2 : 1;
-  f->label(f->canvas, name_scale == 2 ? 34 : 38, name, f->text, name_scale);
+  char short_name[17];
+  fit_label(short_name, name, 16);
+  const int name_scale = f->text_width(short_name, 2) <= 96 ? 2 : 1;
+  const int name_y = name_scale == 2 ? 25 : 29;
+  f->label(f->canvas, name_y, short_name, f->text, name_scale);
+  draw_flag(f, (f->width - f->text_width(short_name, name_scale)) / 2 - 12,
+            name_y + (7 * name_scale - 6) / 2, station_lang(station));
+
+  int lp = 0;
+  append(line2, &lp, sizeof(line2), status);
+  if (kbps > 0) {
+    append(line2, &lp, sizeof(line2), " ");
+    append_int(line2, &lp, sizeof(line2), kbps);
+    append(line2, &lp, sizeof(line2), "k");
+  }
+  char short_status[17];
+  fit_label(short_status, line2, 16);
+  f->label(f->canvas, 48, short_status, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
+
   if (state == 3) {
     uint8_t measured[8];
     const int fresh = f->radio_spectrum(measured, 8);
-    const int bar_width = 6, gap = 4, left = center - (8 * bar_width + 7 * gap) / 2;
+    const int bar_width = 5, gap = 4, left = center - (8 * bar_width + 7 * gap) / 2;
     for (int i = 0; i < 8; ++i) {
       const int target = fresh == 8 ? measured[i] : 0;
       int current = displayed_bands[i];
@@ -267,41 +347,26 @@ int app_main(int argc, char **argv) {
         current -= step > 0 ? step : 1;
       }
       displayed_bands[i] = (uint8_t)current;
-      const int height = current * 30 / 100;
-      if (height > 0) f->fill_rect(f->canvas, left + i * (bar_width + gap), 90 - height,
+      const int height = current * 28 / 100;
+      if (height > 0) f->fill_rect(f->canvas, left + i * (bar_width + gap), 91 - height,
                                    bar_width, height, f->accent);
     }
   } else if (state == 1 || state == 2 || reconnecting) {
     clear_bands(displayed_bands);
-    loading_ring(f, center, 74);
+    loading_ring(f, center, 75);
   } else if (state == 4) {
     clear_bands(displayed_bands);
-    f->ring(f->canvas, center, 74, 15, 2, 0xf800);
-    f->label(f->canvas, 70, "!", 0xf800, 1);
+    f->ring(f->canvas, center, 75, 15, 2, 0xf800);
+    f->label(f->canvas, 71, "!", 0xf800, 1);
   } else {
     clear_bands(displayed_bands);
   }
-  // Status and bitrate share one line instead of two — "Playing  128k" reads as a single fact.
-  int lp = 0;
-  append(line2, &lp, sizeof(line2), status);
-  if (kbps > 0) {
-    append(line2, &lp, sizeof(line2), "  ");
-    append_int(line2, &lp, sizeof(line2), kbps);
-    append(line2, &lp, sizeof(line2), "k");
-  }
-  f->label(f->canvas, 98, line2, state == 4 && !reconnecting ? 0xf800 : f->accent, 1);
-  // One rotating bottom line instead of two fixed rows: volume, then each gesture hint in turn.
-  const int cycle = (int)(f->frame_ms / 3000) % 3;
-  if (cycle == 0) {
-    int ip = 0;
-    append(info, &ip, sizeof(info), "VOL ");
-    append_int(info, &ip, sizeof(info), f->volume);
-    append(info, &ip, sizeof(info), "%");
-    f->label(f->canvas, f->height - 12, info, f->text, 1);
-  } else if (cycle == 1) {
-    f->label(f->canvas, f->height - 12, "2x +/-: station", f->muted, 1);
-  } else {
-    f->label(f->canvas, f->height - 12, "Hold +/-: volume", f->muted, 1);
-  }
+
+  // One clean volume track at the right, with its percentage directly underneath.
+  const int volume = f->volume < 0 ? 0 : f->volume > 100 ? 100 : f->volume;
+  f->fill_rect(f->canvas, f->width - 10, 29, 4, 62, f->muted);
+  const int volume_height = volume * 62 / 100;
+  if (volume_height > 0) f->fill_rect(f->canvas, f->width - 10, 91 - volume_height, 4, volume_height, f->accent);
+  draw_percent(f, volume);
   return 0;
 }

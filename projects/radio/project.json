@@ -1,7 +1,7 @@
 {
   "id": "radio",
   "name": "Internet radio",
-  "version": "1.6.0",
+  "version": "1.6.2",
   "abi": 6,
   "description": "Stream live MP3 radio with an eight-band visualizer driven by decoded audio: Persian, German and BBC stations, plus up to 3 of your own. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
   "category": "Music",

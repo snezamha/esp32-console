@@ -58,7 +58,7 @@
     {
       "id": "radio",
       "name": "Internet radio",
-      "version": "1.6.0",
+      "version": "1.6.2",
       "abi": 6,
       "description": "Stream live MP3 radio with an eight-band visualizer driven by decoded audio: Persian, German and BBC stations, plus up to 3 of your own. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
       "category": "Music",
@@ -287,10 +287,10 @@
         }
       ],
       "board": "esp32-s3-lcd-0.85",
-      "path": "/projects/esp32-s3-lcd-0.85/radio/1.6.0.elf",
-      "size": 7940,
-      "md5": "66080aed078cd56c30f5065195d8d9e1",
-      "sha256": "c85d6275e85678adfc9863b5afebd56bd31ca8ca1223bf6e20b824cd8a0a07ed"
+      "path": "/projects/esp32-s3-lcd-0.85/radio/1.6.2.elf",
+      "size": 8652,
+      "md5": "8f576d9bad4b4d04e0cd6c180162bb2e",
+      "sha256": "6f9b0d1c8fd0d6ed8912d0313d34e791d0e1c82f796e76a1164c27e7d4e7dd23"
     },
     {
       "id": "weather",
