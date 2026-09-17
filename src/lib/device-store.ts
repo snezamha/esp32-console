@@ -54,6 +54,10 @@ function sleep(ms: number, signal: AbortSignal) {
 function toPublic(row: DeviceRow): PublicDevice {
   const pending = row.pending as PendingEdits;
   const settings = effectiveSettings(row);
+  const reportedProjectApi = Number((row.reported as Record<string, unknown>)._project_api) || 0;
+  // v1.1.25 and builds from it include ABI 6, but their sync payload reports the old literal 5.
+  const projectApi = row.board === "esp32-s3-lcd-0.85" && row.firmware.localeCompare("1.1.25", undefined, { numeric: true }) >= 0 && reportedProjectApi === 5
+    ? 6 : reportedProjectApi;
   const commands = expireProjectCommands(row.commands as DeviceCommand[]);
   const storedOta = row.ota as OtaStatus | null;
   const lastOtaCommand = commands.findLast((command) => command.type === "ota");
@@ -80,8 +84,8 @@ function toPublic(row: DeviceRow): PublicDevice {
     settings,
     projectSettings: projectConfigsWithDefaults(row.projectSettings, settings),
     activeProject: (row.reported as DeviceSettings).project ?? "none",
-    projectSupported: row.board === "esp32-s3-lcd-0.85" && Number((row.reported as Record<string, unknown>)._project_api) >= 1,
-    projectApi: Number((row.reported as Record<string, unknown>)._project_api) || 0,
+    projectSupported: row.board === "esp32-s3-lcd-0.85" && projectApi >= 1,
+    projectApi,
     activeProjectVersion: String((row.reported as Record<string, unknown>)._project_version ?? ""),
     activeProjectSha256: String((row.reported as Record<string, unknown>)._project_sha256 ?? ""),
     projectSafeMode: (row.reported as Record<string, unknown>)._project_safe === 1,

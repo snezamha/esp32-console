@@ -96,6 +96,13 @@ globalThis.__projectTest = { db, DEFAULT_SETTINGS, expireProjectCommands, projec
 let storeSource = ts.transpileModule(readFileSync("src/lib/device-store.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 storeSource = storeSource.replace(/import .* from "@\/lib\/project-transfers";/, "const { expireProjectCommands, projectPending } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/db";/, "const { db } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/project-config";/, "const { projectConfigsWithDefaults } = globalThis.__projectTest;");
 const store = await import(`data:text/javascript;base64,${Buffer.from(storeSource).toString("base64")}`);
+row.firmware = "1.1.25";
+row.reported._project_api = 5;
+assert.equal((await store.listDevices("owner"))[0].projectApi, 6, "Firmware 1.1.25 must expose its compiled ABI 6 despite the stale sync value");
+row.firmware = "1.1.24";
+assert.equal((await store.listDevices("owner"))[0].projectApi, 5, "Older firmware must keep its reported ABI");
+row.firmware = "1.0.5";
+row.reported._project_api = 1;
 const file = readFileSync(`public${manifest.projects[0].path}`);
 const meta = { name: "Local clock", version: "1.0.1", size: file.length, bytes: file };
 const queued = await store.queueCommand("owner", "board", "project_install", "id=custom-clock&path=%2Fapi%2Fdevices%2F&abi=1", "", meta);
