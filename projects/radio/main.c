@@ -1,15 +1,23 @@
 #include "project_api.h"
 
-struct Station { const char *id, *name, *lang, *url; };
+struct Station { const char *id, *name, *menu_name, *lang, *url; };
 static const struct Station stations[] = {
-  {"farda", "Radio Farda", "FA", "https://stream.radiojar.com/cp13r2cpn3quv"},
-  {"navahang", "Navahang", "FA", "https://navairan.com/;stream.nsv"},
-  {"bbc", "BBC World Svc", "EN", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
-  {"dlf", "Deutschlandfunk", "DE", "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3"},
-  {"ndrinfo", "NDR Info", "DE", "https://icecast.ndr.de/ndr/ndrinfo/live/mp3/128/stream.mp3"},
-  {"1live", "1LIVE", "DE", "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
+  {"farda", "Radio Farda", "Radio Farda", "FA", "https://stream.radiojar.com/cp13r2cpn3quv"},
+  {"navahang", "Navahang", "Navahang", "FA", "https://navairan.com/;stream.nsv"},
+  {"bbc", "BBC World Svc", "BBC World", "EN", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
+  {"dlf", "Deutschlandfunk", "DLF", "DE", "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3"},
+  {"ndrinfo", "NDR Info", "NDR Info", "DE", "https://icecast.ndr.de/ndr/ndrinfo/live/mp3/128/stream.mp3"},
+  {"1live", "1LIVE", "1LIVE", "DE", "https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3"},
+  {"dlfkultur", "Deutschlandfunk Kultur", "DLF Kultur", "DE", "https://st02.sslstream.dlf.de/dlf/02/128/mp3/stream.mp3"},
+  {"dlfnova", "Deutschlandfunk Nova", "DLF Nova", "DE", "https://st03.sslstream.dlf.de/dlf/03/128/mp3/stream.mp3"},
+  {"1livediggi", "1LIVE DIGGI", "1LIVE DIGGI", "DE", "https://wdr-1live-diggi.icecastssl.wdr.de/wdr/1live/diggi/mp3/128/stream.mp3"},
+  {"wdr3", "WDR 3", "WDR 3", "DE", "https://wdr-wdr3-live.icecastssl.wdr.de/wdr/wdr3/live/mp3/128/stream.mp3"},
+  {"wdr4", "WDR 4", "WDR 4", "DE", "https://wdr-wdr4-live.icecastssl.wdr.de/wdr/wdr4/live/mp3/128/stream.mp3"},
+  {"wdr5", "WDR 5", "WDR 5", "DE", "https://wdr-wdr5-live.icecastssl.wdr.de/wdr/wdr5/live/mp3/128/stream.mp3"},
+  {"wdrevent", "WDR Event", "WDR Event", "DE", "https://wdr-wdr-event.icecastssl.wdr.de/wdr/wdr/event/mp3/128/stream.mp3"},
 };
 #define STATION_COUNT (sizeof(stations) / sizeof(stations[0]))
+#define PREVIOUS_STATION_COUNT 6
 #define MAX_CUSTOM 3
 #define CUSTOM_URL_CAP 128
 #define CUSTOM_NAME_CAP 24
@@ -28,6 +36,9 @@ static const char *station_name(int i) {
   if (i < (int)STATION_COUNT) return stations[i].name;
   const char *custom = custom_names[i - STATION_COUNT];
   return custom[0] ? custom : "Custom station";
+}
+static const char *station_menu_name(int i) {
+  return i < (int)STATION_COUNT ? stations[i].menu_name : station_name(i);
 }
 static const char *station_lang(int i) {
   return i < (int)STATION_COUNT ? stations[i].lang : custom_langs[i - STATION_COUNT];
@@ -247,6 +258,7 @@ static void save_last_station(struct ProjectFrame *f, int index) {
   if (!f->sd_mounted) return;
   char digits[8];
   int n = 0;
+  append(digits, &n, sizeof(digits), "v2:");
   append_int(digits, &n, sizeof(digits), index);
   f->storage_write("station.idx", digits, n, 0);
 }
@@ -255,12 +267,41 @@ static int load_last_station(struct ProjectFrame *f) {
   char digits[8];
   int32_t n = f->storage_read("station.idx", 0, digits, sizeof(digits));
   if (n <= 0) return -1;
+  const int current_format = n >= 3 && digits[0] == 'v' && digits[1] == '2' && digits[2] == ':';
   int value = 0;
-  for (int i = 0; i < n; ++i) {
+  for (int i = current_format ? 3 : 0; i < n; ++i) {
     if (digits[i] < '0' || digits[i] > '9') return -1;
     value = value * 10 + (digits[i] - '0');
   }
+  if (!current_format && value >= PREVIOUS_STATION_COUNT &&
+      value < PREVIOUS_STATION_COUNT + MAX_CUSTOM)
+    value += (int)STATION_COUNT - PREVIOUS_STATION_COUNT;
   return value;
+}
+
+static void draw_station_menu(struct ProjectFrame *f, int selected) {
+  const int count = total_stations();
+  char counter[8] = "";
+  int cp = 0;
+  append_int(counter, &cp, sizeof(counter), selected + 1);
+  append(counter, &cp, sizeof(counter), "/");
+  append_int(counter, &cp, sizeof(counter), count);
+  f->label(f->canvas, 3, "STATIONS", f->text, 1);
+  draw_tiny_text(f, (f->width - (cp * 5 - 1)) / 2, 13, counter, f->muted);
+  for (int row = -2; row <= 2; ++row) {
+    const int index = (selected + row + count) % count;
+    const int y = 59 + row * 17;
+    if (row == 0) f->rect(f->canvas, 15, y - 2, f->width - 30, 12, f->accent);
+    draw_flag(f, 3, y + 1, station_lang(index));
+    char name[15];
+    fit_label(name, station_menu_name(index), 14);
+    f->label(f->canvas, y, name, row == 0 ? f->accent : f->text, 1);
+    char number[5] = "";
+    int np = 0;
+    append_int(number, &np, sizeof(number), index + 1);
+    draw_tiny_text(f, f->width - 4 - (np * 5 - 1), y, number, f->muted);
+  }
+  f->label(f->canvas, 103, "PWR play  2x back", f->muted, 1);
 }
 
 int app_main(int argc, char **argv) {
@@ -268,6 +309,9 @@ int app_main(int argc, char **argv) {
   struct ProjectFrame *f = (struct ProjectFrame *)argv[0];
   if (f->abi != DISPLAY_PROJECT_ABI) return -1;
   static int station = -1;
+  static int menu_open = 0, menu_station = 0;
+  static uint32_t menu_input_at_ms = 0;
+  static struct TapState power_tap = {0};
   static char last_config[20] = "";
   static char last_custom[3 * (CUSTOM_URL_CAP + CUSTOM_NAME_CAP + CUSTOM_LANG_CAP)] = "";
   const char *config = f->data[0] ? f->data[0] : "";
@@ -279,6 +323,7 @@ int app_main(int argc, char **argv) {
     parse_custom(custom_blob);
     const int restored = first_boot ? load_last_station(f) : -1;
     station = (restored >= 0 && restored < total_stations()) ? restored : configured(config);
+    menu_open = 0;
     f->radio_start(station_url(station));
   }
 
@@ -290,10 +335,58 @@ int app_main(int argc, char **argv) {
   if (last_frame_ms && f->frame_ms - last_frame_ms > 300) {
     up_tap.was_pressed = down_tap.was_pressed = 0;
     up_tap.last_release_ms = down_tap.last_release_ms = 0;
+    power_tap.was_pressed = power_tap.last_release_ms = 0;
   }
   last_frame_ms = f->frame_ms;
+  const int power_pressed = (f->buttons & 1) != 0;
   const int up_pressed = (f->buttons & 2) != 0;
   const int down_pressed = (f->buttons & 4) != 0;
+  const int power_double = double_tap(&power_tap, power_pressed, f->button_held_ms[0], f->frame_ms);
+  if (power_double) {
+    menu_open = !menu_open;
+    menu_station = station;
+    menu_input_at_ms = f->frame_ms;
+    up_tap.was_pressed = down_tap.was_pressed = 0;
+    up_tap.last_release_ms = down_tap.last_release_ms = 0;
+  }
+  if (menu_open) {
+    static int menu_up_was = 0, menu_down_was = 0;
+    static uint32_t up_repeat_at = 0, down_repeat_at = 0;
+    if (up_pressed && !down_pressed &&
+        (!menu_up_was || (f->button_held_ms[1] >= 450 && f->frame_ms >= up_repeat_at))) {
+      menu_station = (menu_station + 1) % total_stations();
+      menu_input_at_ms = f->frame_ms;
+      up_repeat_at = f->frame_ms + (menu_up_was ? 150 : 450);
+    }
+    if (down_pressed && !up_pressed &&
+        (!menu_down_was || (f->button_held_ms[2] >= 450 && f->frame_ms >= down_repeat_at))) {
+      menu_station = (menu_station + total_stations() - 1) % total_stations();
+      menu_input_at_ms = f->frame_ms;
+      down_repeat_at = f->frame_ms + (menu_down_was ? 150 : 450);
+    }
+    menu_up_was = up_pressed;
+    menu_down_was = down_pressed;
+    if (f->frame_ms - menu_input_at_ms > 20000) {
+      menu_open = 0;
+      power_tap.last_release_ms = 0;
+    }
+    if (!power_pressed && power_tap.last_release_ms &&
+        f->frame_ms - power_tap.last_release_ms > 240) {
+      power_tap.last_release_ms = 0;
+      menu_open = 0;
+      if (station != menu_station) {
+        station = menu_station;
+        f->radio_start(station_url(station));
+        save_last_station(f, station);
+      }
+    }
+    if (menu_open) {
+      f->radio_menu_open = 1;
+      draw_station_menu(f, menu_station);
+      return 0;
+    }
+  }
+  f->radio_menu_open = 0;
   if (up_pressed && down_pressed) combo_blocked = 1;
   if (combo_blocked) {
     up_tap.was_pressed = down_tap.was_pressed = 0;

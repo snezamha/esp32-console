@@ -55,8 +55,8 @@ function toPublic(row: DeviceRow): PublicDevice {
   const pending = row.pending as PendingEdits;
   const settings = effectiveSettings(row);
   const reportedProjectApi = Number((row.reported as Record<string, unknown>)._project_api) || 0;
-  // v1.1.25 and builds from it include ABI 6, but their sync payload reports the old literal 5.
-  const projectApi = row.board === "esp32-s3-lcd-0.85" && row.firmware.localeCompare("1.1.25", undefined, { numeric: true }) >= 0 && reportedProjectApi === 5
+  // v1.1.25 includes ABI 6, but its sync payload reports the old literal 5.
+  const projectApi = row.board === "esp32-s3-lcd-0.85" && row.firmware === "1.1.25" && reportedProjectApi === 5
     ? 6 : reportedProjectApi;
   const commands = expireProjectCommands(row.commands as DeviceCommand[]);
   const storedOta = row.ota as OtaStatus | null;

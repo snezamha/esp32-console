@@ -1,5 +1,6 @@
 #include "board.h"
 #include "../services/radio_stream.h"
+#include "../runtime/project_runtime.h"
 
 #include "../led/led_pattern.h"
 
@@ -115,6 +116,7 @@ void Board::InitializeButtons() {
     pwr_button_armed_ = true;
 
     pwr_button_.OnClick([this]() {
+      if (ProjectRuntime::Get().RadioMenuOpen() || ProjectRuntime::Get().RadioMenuRecentlyClosed()) return;
       if (menu_key_handler_) menu_key_handler_(MenuKey::Select);
     });
 
@@ -124,6 +126,7 @@ void Board::InitializeButtons() {
     });
 
     pwr_button_.OnDoubleClick([this]() {
+      if (ProjectRuntime::Get().RadioMenuSupported() && !menu_open_) return;
       static uint8_t brightness_last = 0;
       auto backlight = GetBacklight();
       if (backlight->brightness() == 0) {
@@ -136,6 +139,7 @@ void Board::InitializeButtons() {
   });
 
   volume_up_button_.OnClick([this]() {
+    if (ProjectRuntime::Get().RadioMenuOpen()) return;
     if (menu_open_) {
       if (menu_key_handler_) menu_key_handler_(MenuKey::Up);
       return;
@@ -148,6 +152,7 @@ void Board::InitializeButtons() {
   });
 
   volume_up_button_.OnLongPress([this]() {
+    if (ProjectRuntime::Get().RadioMenuOpen()) return;
     if (menu_open_) return;
     if (RadioStream::Get().Active()) return;  // Radio ramps volume continuously instead; see Loop().
     audio_codec_->SetOutputVolume(100);
@@ -155,6 +160,7 @@ void Board::InitializeButtons() {
   });
 
   volume_down_button_.OnClick([this]() {
+    if (ProjectRuntime::Get().RadioMenuOpen()) return;
     if (menu_open_) {
       if (menu_key_handler_) menu_key_handler_(MenuKey::Down);
       return;
@@ -167,6 +173,7 @@ void Board::InitializeButtons() {
   });
 
   volume_down_button_.OnLongPress([this]() {
+    if (ProjectRuntime::Get().RadioMenuOpen()) return;
     if (menu_open_) return;
     if (RadioStream::Get().Active()) return;
     audio_codec_->SetOutputVolume(0);
@@ -175,8 +182,11 @@ void Board::InitializeButtons() {
 }
 
 void Board::Loop() {
+  const bool radio_menu = ProjectRuntime::Get().RadioMenuOpen();
+  pwr_button_.SetShortPressTime(!menu_open_ && ProjectRuntime::Get().RadioMenuSupported()
+                                    ? 260 : Button::kDefaultShortPressMs);
   // Radio needs a slightly wider double-tap window. Keep the normal response time in menus.
-  const uint16_t click_window = !menu_open_ && RadioStream::Get().Active()
+  const uint16_t click_window = !menu_open_ && !radio_menu && RadioStream::Get().Active()
                                     ? 260 : Button::kDefaultShortPressMs;
   volume_up_button_.SetShortPressTime(click_window);
   volume_down_button_.SetShortPressTime(click_window);
@@ -204,7 +214,7 @@ void Board::Loop() {
   // Vol+ and Vol- together: toggle the menu once per press, without volume changes.
   const bool up = volume_up_button_.IsPressed();
   const bool down = volume_down_button_.IsPressed();
-  if (up && down && !volume_combo_latched_) {
+  if (up && down && !volume_combo_latched_ && !radio_menu) {
     volume_combo_latched_ = true;
     if (menu_key_handler_) menu_key_handler_(MenuKey::Toggle);
   } else if (!up && !down) {
@@ -215,9 +225,9 @@ void Board::Loop() {
     volume_down_button_.Cancel();
   }
 
-  // In radio, a tap steps volume by 5%, a double tap selects a station in the project,
+  // Outside the station picker, a tap steps volume by 5%, a double tap changes station,
   // and a hold ramps volume continuously.
-  if (!menu_open_ && !volume_combo_latched_ && RadioStream::Get().Active()) {
+  if (!menu_open_ && !radio_menu && !volume_combo_latched_ && RadioStream::Get().Active()) {
     RampRadioVolume(volume_up_button_, 1, ramp_up_next_ms_);
     RampRadioVolume(volume_down_button_, -1, ramp_down_next_ms_);
   } else {

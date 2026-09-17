@@ -417,6 +417,10 @@ int32_t HttpResult(void* buffer, uint32_t capacity, int* status) {
 
 bool ProjectRuntime::OwnsLed() const { return g_led_owned && loaded_; }
 
+bool ProjectRuntime::RadioMenuRecentlyClosed() const {
+  return RadioMenuSupported() && radio_menu_closed_at_ms_ && millis() - radio_menu_closed_at_ms_ < 300;
+}
+
 bool ProjectRuntime::Inspect(const std::vector<uint8_t>& bytes, Metadata& metadata) {
   if (bytes.size() < sizeof(elf32_hdr_t) || bytes.size() > kMaxPackage) return false;
   const auto* hdr = reinterpret_cast<const elf32_hdr_t*>(bytes.data());
@@ -1111,6 +1115,9 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
   const auto saved = c.GetClip(); c.IntersectClip(x,y,w,h);
   char* argv[] = {reinterpret_cast<char*>(&frame)};
   const int result = esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);
+  const bool menu_was_open = radio_menu_open_;
+  radio_menu_open_ = result == 0 && RadioMenuSupported() && frame.radio_menu_open != 0;
+  if (menu_was_open && !radio_menu_open_) radio_menu_closed_at_ms_ = millis();
   if (testing_) {
     if (result != 0) { RestorePrevious("Project rejected its first display frame."); return loaded_; }
     testing_ = false; stage_ = 6; progress_ = 100; ack_ok_ = true; ack_ready_ = true;

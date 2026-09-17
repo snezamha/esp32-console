@@ -4,12 +4,13 @@
 // Stable C ABI for independently compiled Xtensa ELF display modules.
 // Coordinates are relative to the content area. The host clips every primitive.
 // ABI 3 appends SD card asset access. ABI 4 appends controlled board I/O. ABI 5 appends
-// background MP3 radio playback. ABI 6 appends levels measured from decoded radio audio. Fields are only
+// background MP3 radio playback. ABI 6 appends levels measured from decoded radio audio.
+// ABI 7 lets a project reserve the radio buttons while its station picker is open. Fields are only
 // appended, and the host sets `abi` to the version the module was built for, so older modules
 // keep working unchanged.
 // `pnpm projects:build` defines DISPLAY_PROJECT_ABI=2 for projects without SD card assets.
 #ifndef DISPLAY_PROJECT_ABI
-#define DISPLAY_PROJECT_ABI 6
+#define DISPLAY_PROJECT_ABI 7
 #endif
 #define DISPLAY_PROJECT_MIN_ABI 2
 #ifdef __cplusplus
@@ -94,6 +95,8 @@ struct ProjectFrame {
   int (*radio_status)(char *text, uint32_t capacity, int *bitrate_kbps);
   // ABI 6: eight frequency bands, 0-100. Returns 8 for fresh playback data, 0 otherwise.
   int (*radio_spectrum)(uint8_t *levels, uint32_t capacity);
+  // ABI 7: output. Set to 1 while a radio project's own station picker uses the buttons.
+  int radio_menu_open;
 };
 #ifdef __cplusplus
 }

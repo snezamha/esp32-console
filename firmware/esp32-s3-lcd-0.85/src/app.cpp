@@ -14,6 +14,7 @@
 #include "hw_test.h"
 #include "services/console_client.h"
 #include "runtime/project_runtime.h"
+#include "runtime/project_api.h"
 #include "lang.h"
 #include "services/device_config.h"
 #include "services/heap_guard.h"
@@ -1234,7 +1235,7 @@ std::string App::ReportState() {
            b(config.ble_on), b(config.clock_on), config.timezone.c_str(), b(config.battery_percent));
   // Time zone ids only contain letters and '/', '_': safe in a form body except '/'.
   std::string body = buf;
-  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=5";
+  body += "&s.project=" + ProjectRuntime::Get().Id() + "&project_api=" + std::to_string(DISPLAY_PROJECT_ABI);
   body += "&project_version=" + ProjectRuntime::Get().Version();
   body += "&project_sha256=" + ProjectRuntime::Get().Sha256();
   body += "&project_safe=" + std::string(ProjectRuntime::Get().SafeMode() ? "1" : "0");

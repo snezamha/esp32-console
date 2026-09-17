@@ -28,6 +28,9 @@ class ProjectRuntime {
   const std::string& Sha256() const { return sha256_; }
   bool SafeMode() const { return safe_mode_; }
   bool Busy() const { return busy_ || testing_; }
+  bool RadioMenuSupported() const { return loaded_ && id_ == "radio" && abi_ >= 7 && !busy_ && !testing_; }
+  bool RadioMenuOpen() const { return RadioMenuSupported() && radio_menu_open_; }
+  bool RadioMenuRecentlyClosed() const;
   bool OwnsLed() const;
   bool SdIoAvailable() const { return !sd_locked_; }
   int Progress() const { return progress_; }
@@ -61,6 +64,8 @@ class ProjectRuntime {
   bool ack_ok_ = false;
   bool sd_required_ = false, sd_ready_ = false, sd_locked_ = false;
   int abi_ = 0;
+  bool radio_menu_open_ = false;
+  uint32_t radio_menu_closed_at_ms_ = 0;
   uint32_t sd_checked_at_ = 0;
   uint64_t sd_total_ = 0, sd_free_ = 0;
   std::string assets_digest_;

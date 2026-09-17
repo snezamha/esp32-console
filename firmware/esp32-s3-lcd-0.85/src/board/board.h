@@ -54,7 +54,7 @@ class Board {
   Button& GetVolumeDownButton() { return volume_down_button_; }
 
   // While the menu is open Vol+ / Vol- navigate instead of changing the volume.
-  // Power click always sends Select; a press that wakes the screen is ignored.
+  // Power selects in the system menu. The radio project reserves it for station selection.
   void SetMenuKeyHandler(std::function<void(MenuKey)> handler) { menu_key_handler_ = handler; }
   void SetMenuOpen(bool open) { menu_open_ = open; }
   // Return true to keep a Power long press from switching the board off.

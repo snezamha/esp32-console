@@ -47,7 +47,7 @@ for (const project of manifest.projects) {
   assert.throws(() => inspectProject(file.subarray(0, 100)));
   const abiMarker = file.indexOf(Buffer.from(`"abi":${project.abi}`));
   assert.ok(abiMarker >= 0);
-  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, true], [7, false]]) {
+  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, true], [7, true], [8, false]]) {
     const changed = Buffer.from(file); changed[abiMarker + 6] = 48 + abi;
     if (valid) assert.equal(inspectProject(changed).abi, abi); else assert.throws(() => inspectProject(changed));
   }
@@ -99,7 +99,11 @@ const store = await import(`data:text/javascript;base64,${Buffer.from(storeSourc
 row.firmware = "1.1.25";
 row.reported._project_api = 5;
 assert.equal((await store.listDevices("owner"))[0].projectApi, 6, "Firmware 1.1.25 must expose its compiled ABI 6 despite the stale sync value");
+row.firmware = "1.1.26";
+row.reported._project_api = 7;
+assert.equal((await store.listDevices("owner"))[0].projectApi, 7, "Firmware 1.1.26 must report ABI 7 directly");
 row.firmware = "1.1.24";
+row.reported._project_api = 5;
 assert.equal((await store.listDevices("owner"))[0].projectApi, 5, "Older firmware must keep its reported ABI");
 row.firmware = "1.0.5";
 row.reported._project_api = 1;

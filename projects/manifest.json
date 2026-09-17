@@ -58,13 +58,13 @@
     {
       "id": "radio",
       "name": "Internet radio",
-      "version": "1.6.3",
-      "abi": 6,
-      "description": "Stream live MP3 radio with an eight-band visualizer driven by decoded audio: Persian, German and BBC stations, plus up to 3 of your own. Tap + or − for volume, hold to ramp volume, or double-tap to change stations.",
+      "version": "1.7.0",
+      "abi": 7,
+      "description": "Stream live MP3 radio with an eight-band visualizer and 13 built-in stations, plus up to 3 of your own. Double-tap Power for the station list; use + or − to browse and Power to play. Outside the list, tap + or − for volume, hold to ramp, or double-tap to change stations.",
       "category": "Music",
       "icon": "radio",
       "accent": "#f97316",
-      "minimumFirmware": "1.1.25",
+      "minimumFirmware": "1.1.26",
       "capabilities": [
         "internet",
         "speaker"
@@ -99,6 +99,34 @@
             {
               "value": "1live",
               "label": "1LIVE · Deutsch"
+            },
+            {
+              "value": "dlfkultur",
+              "label": "Deutschlandfunk Kultur · Deutsch"
+            },
+            {
+              "value": "dlfnova",
+              "label": "Deutschlandfunk Nova · Deutsch"
+            },
+            {
+              "value": "1livediggi",
+              "label": "1LIVE DIGGI · Deutsch"
+            },
+            {
+              "value": "wdr3",
+              "label": "WDR 3 · Deutsch"
+            },
+            {
+              "value": "wdr4",
+              "label": "WDR 4 · Deutsch"
+            },
+            {
+              "value": "wdr5",
+              "label": "WDR 5 · Deutsch"
+            },
+            {
+              "value": "wdrevent",
+              "label": "WDR Event · Deutsch"
             }
           ]
         },
@@ -287,10 +315,10 @@
         }
       ],
       "board": "esp32-s3-lcd-0.85",
-      "path": "/projects/esp32-s3-lcd-0.85/radio/1.6.3.elf",
-      "size": 8688,
-      "md5": "aade70b75047d35d83f2ff3dbd493772",
-      "sha256": "2d964c91eef6f5a31049f83e00cbf00089bde5abc1e895ad6ef38896eaacfb95"
+      "path": "/projects/esp32-s3-lcd-0.85/radio/1.7.0.elf",
+      "size": 12580,
+      "md5": "21e9d919cb2c403b26151528f48e09e2",
+      "sha256": "86a49337ce780c9f9040e3ce41e46b7a1801205a3cb05952a4890014e99f8cfb"
     },
     {
       "id": "weather",
