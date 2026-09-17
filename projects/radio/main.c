@@ -143,7 +143,7 @@ static void loading_ring(struct ProjectFrame *f, int x, int y) {
   }
 }
 
-// Tiny 9x6 flag beside the station name; custom stations use their selected language.
+// Tiny 9x6 flag beside the station number; custom stations use their selected language.
 static void draw_flag(struct ProjectFrame *f, int x, int y, const char *lang) {
   if (same(lang, "FA")) {
     f->fill_rect(f->canvas, x, y, 9, 2, 0x07e0);
@@ -187,27 +187,37 @@ static void draw_flag(struct ProjectFrame *f, int x, int y, const char *lang) {
   }
 }
 
-static void draw_percent(struct ProjectFrame *f, int value) {
-  // Three-by-five digits keep even "100%" centered below the 4-pixel volume track.
-  static const uint8_t glyphs[11][5] = {
-    {7, 5, 5, 5, 7}, {2, 6, 2, 2, 7}, {7, 1, 7, 4, 7}, {7, 1, 7, 1, 7},
-    {5, 5, 7, 1, 1}, {7, 4, 7, 1, 7}, {7, 4, 7, 5, 7}, {7, 1, 1, 1, 1},
-    {7, 5, 7, 5, 7}, {7, 5, 7, 1, 7}, {5, 1, 2, 4, 5},
+static void draw_tiny_text(struct ProjectFrame *f, int x, int y, const char *text, uint16_t color) {
+  // Four-by-seven glyphs with one pixel of spacing. 10 = %, 11 = /.
+  static const uint8_t glyphs[12][7] = {
+    {15, 9, 9, 9, 9, 9, 15}, {2, 6, 2, 2, 2, 2, 7},
+    {15, 1, 1, 15, 8, 8, 15}, {15, 1, 1, 7, 1, 1, 15},
+    {9, 9, 9, 15, 1, 1, 1}, {15, 8, 8, 15, 1, 1, 15},
+    {15, 8, 8, 15, 9, 9, 15}, {15, 1, 2, 2, 4, 4, 4},
+    {15, 9, 9, 15, 9, 9, 15}, {15, 9, 9, 15, 1, 1, 15},
+    {9, 9, 2, 2, 4, 9, 9}, {1, 1, 2, 2, 4, 8, 8},
   };
+  for (int i = 0; text[i]; ++i) {
+    const int glyph = text[i] == '%' ? 10 : text[i] == '/' ? 11 : text[i] - '0';
+    if (glyph < 0 || glyph >= 12) continue;
+    for (int row = 0; row < 7; ++row) {
+      for (int col = 0; col < 4; ++col) {
+        if (glyphs[glyph][row] & (8 >> col))
+          f->fill_rect(f->canvas, x + i * 5 + col, y + row, 1, 1, color);
+      }
+    }
+  }
+}
+
+static void draw_percent(struct ProjectFrame *f, int value) {
   char text[8];
   int length = 0;
   append_int(text, &length, sizeof(text), value);
   append(text, &length, sizeof(text), "%");
-  const int start_x = f->width - 8 - (length * 4 - 1) / 2;
-  for (int i = 0; i < length; ++i) {
-    const int glyph = text[i] == '%' ? 10 : text[i] - '0';
-    for (int row = 0; row < 5; ++row) {
-      for (int col = 0; col < 3; ++col) {
-        if (glyphs[glyph][row] & (4 >> col))
-          f->fill_rect(f->canvas, start_x + i * 4 + col, 98 + row, 1, 1, f->text);
-      }
-    }
-  }
+  const int width = length * 5 - 1;
+  int start_x = f->width - 8 - width / 2;
+  if (start_x + width > f->width) start_x = f->width - width;
+  draw_tiny_text(f, start_x, 97, text, f->text);
 }
 
 static void clear_bands(uint8_t *bands) {
@@ -303,23 +313,24 @@ int app_main(int argc, char **argv) {
   int kbps = 0;
   const int state = f->radio_status(status, sizeof(status), &kbps);
   const int reconnecting = state == 4 && same(status, "Reconnecting");
-  const int center = (f->width - 14) / 2;
+  const int center = f->width / 2;
   static uint8_t displayed_bands[8] = {0};
 
-  // Each element has its own space: station index, name/flag, status, spectrum, and volume.
+  // Each element has its own space: station index/flag, name, status, spectrum, and volume.
   int cp = 0;
   append_int(counter, &cp, sizeof(counter), station + 1);
   append(counter, &cp, sizeof(counter), "/");
   append_int(counter, &cp, sizeof(counter), total_stations());
-  f->label(f->canvas, 5, counter, f->muted, 1);
+  const int counter_width = cp * 5 - 1;
+  const int header_x = (f->width - counter_width - 4 - 9) / 2;
+  draw_tiny_text(f, header_x, 5, counter, f->muted);
+  draw_flag(f, header_x + counter_width + 4, 6, station_lang(station));
   const char *name = station_name(station);
   char short_name[17];
   fit_label(short_name, name, 16);
   const int name_scale = f->text_width(short_name, 2) <= 96 ? 2 : 1;
   const int name_y = name_scale == 2 ? 25 : 29;
   f->label(f->canvas, name_y, short_name, f->text, name_scale);
-  draw_flag(f, (f->width - f->text_width(short_name, name_scale)) / 2 - 12,
-            name_y + (7 * name_scale - 6) / 2, station_lang(station));
 
   int lp = 0;
   append(line2, &lp, sizeof(line2), status);
