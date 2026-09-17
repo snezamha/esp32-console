@@ -303,9 +303,10 @@ std::string ConsoleClient::CommonFields() {
   return body;
 }
 
-bool ConsoleClient::Start(Slot& slot, const std::string& body, uint32_t timeout_ms) {
+bool ConsoleClient::Start(Slot& slot, const std::string& body, uint32_t timeout_ms, const std::string& auth) {
   slot.url = server_ + "/api/device/sync";
   slot.body = body;
+  slot.auth = auth;
   slot.timeout_ms = timeout_ms;
   slot.tls = server_.rfind("https://", 0) == 0;
   slot.insecure = insecure_;
@@ -322,12 +323,15 @@ bool ConsoleClient::Start(Slot& slot, const std::string& body, uint32_t timeout_
 void ConsoleClient::StartPoll(uint32_t now_ms) {
   last_poll_start_ms_ = now_ms;
   std::string body = CommonFields();
+  std::string auth;
   bool wait = false;
 
   if (!revoke_token_.empty()) {
-    body += "&token=" + UrlEncode(revoke_token_) + "&unlink=1";
+    auth = revoke_token_;
+    body += "&unlink=1";
   } else if (!token_.empty()) {
-    body += "&token=" + UrlEncode(token_) + "&rev=" + std::to_string(rev_);
+    auth = token_;
+    body += "&rev=" + std::to_string(rev_);
     const std::string state = state_provider_ ? state_provider_() : "";
     if (!state.empty()) body += "&" + state;
     for (const auto& ack : acks_) body += "&ack=" + UrlEncode(ack);
@@ -343,7 +347,7 @@ void ConsoleClient::StartPoll(uint32_t now_ms) {
   }
   if (wait) body += "&wait=" + std::to_string(kPollWaitS);
 
-  if (!Start(poll_, body, wait ? kPollTimeoutMs : kRequestTimeoutMs)) next_poll_ms_ = now_ms + kRetryMs;
+  if (!Start(poll_, body, wait ? kPollTimeoutMs : kRequestTimeoutMs, auth)) next_poll_ms_ = now_ms + kRetryMs;
 }
 
 void ConsoleClient::RequestTask(void* arg) {
@@ -366,6 +370,7 @@ void ConsoleClient::RequestTask(void* arg) {
     const bool begun = slot->tls ? http.begin(secure, slot->url.c_str()) : http.begin(plain, slot->url.c_str());
     if (begun) {
       http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      if (!slot->auth.empty()) http.addHeader("Authorization", ("Bearer " + slot->auth).c_str());
       code = http.POST(slot->body.c_str());
       if (code > 0) body = http.getString().c_str();
       http.end();

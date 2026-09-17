@@ -459,10 +459,10 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   auto& network = Network::GetInstance();
   const int cx = x + w / 2;
   auto& console = ConsoleClient::GetInstance();
-  // A saved project must not obscure pairing or a failed pairing connection.
-  const bool pairing = network.State() == Network::WifiState::Setup ||
-      !console.Code().empty() ||
-      (network.State() == Network::WifiState::Connected && !console.HasLink());
+  // A saved project must not obscure Wi-Fi setup or a shown pairing code. The brief window
+  // right after connecting, before the first poll answers whether this board is new or just
+  // relinking (lost its token on reset), stays quiet and lets a cached project keep showing.
+  const bool pairing = network.State() == Network::WifiState::Setup || !console.Code().empty();
   if (!pairing && ProjectRuntime::Get().Draw(c, x, y, w, h, theme)) return;
   const int line = Canvas::LineHeight() + 2;
   std::vector<std::pair<std::string, uint16_t>> lines;
@@ -506,13 +506,15 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
         if (console.Server().empty()) {
           lines = {{"Console not set", theme.info}, {"Devices > Add", theme.muted},
                    {"Connect via USB", theme.text}};
+          break;
         } else if (!console.LastError().empty()) {
           lines = {{"Pairing failed", theme.fail}, {console.LastError(), theme.text},
                    {console.ServerHost(), theme.muted}, {"Retrying...", theme.info}};
-        } else {
-          lines = {{"Getting code...", theme.info}, {console.ServerHost(), theme.text}};
+          break;
         }
-        break;
+        // Waiting on the first poll to say whether this is a new board or just relinking after
+        // losing its token; nothing worth showing yet.
+        return;
       }
       // Linked with no project: the default display stays empty (status bar only).
       return;

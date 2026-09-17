@@ -14,6 +14,7 @@
     "projects:build": "node scripts/build-projects.mjs",
     "projects:verify": "node scripts/verify-projects.mjs",
     "projects:test": "node scripts/test-projects.mjs",
+    "devices:test:relink": "node scripts/test-device-relink.mjs",
     "firmware:test:pairing": "node scripts/test-pairing-display.mjs",
     "firmware:test:loader": "node scripts/test-elf-loader.mjs",
     "firmware:test:led": "node scripts/test-led-pattern.mjs",

@@ -14,7 +14,6 @@ static const struct Station stations[] = {
   {"wdr3", "WDR 3", "WDR 3", "DE", "https://wdr-wdr3-live.icecastssl.wdr.de/wdr/wdr3/live/mp3/128/stream.mp3"},
   {"wdr4", "WDR 4", "WDR 4", "DE", "https://wdr-wdr4-live.icecastssl.wdr.de/wdr/wdr4/live/mp3/128/stream.mp3"},
   {"wdr5", "WDR 5", "WDR 5", "DE", "https://wdr-wdr5-live.icecastssl.wdr.de/wdr/wdr5/live/mp3/128/stream.mp3"},
-  {"wdrevent", "WDR Event", "WDR Event", "DE", "https://wdr-wdr-event.icecastssl.wdr.de/wdr/wdr/event/mp3/128/stream.mp3"},
 };
 #define STATION_COUNT (sizeof(stations) / sizeof(stations[0]))
 #define PREVIOUS_STATION_COUNT 6

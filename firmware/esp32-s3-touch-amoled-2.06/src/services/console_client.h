@@ -87,6 +87,7 @@ class ConsoleClient {
     std::atomic<bool> done{false};
     std::string url;
     std::string body;
+    std::string auth;  // Sent as "Authorization: Bearer <auth>" when non-empty.
     uint32_t timeout_ms = 0;
     bool tls = false;
     bool insecure = false;
@@ -100,7 +101,7 @@ class ConsoleClient {
   ConsoleClient() = default;
   static void RequestTask(void* arg);
   static void OtaTask(void* arg);
-  bool Start(Slot& slot, const std::string& body, uint32_t timeout_ms);
+  bool Start(Slot& slot, const std::string& body, uint32_t timeout_ms, const std::string& auth = "");
   std::string CommonFields();
   void StartPoll(uint32_t now_ms);
   void HandlePoll(int http_code, const std::string& body);

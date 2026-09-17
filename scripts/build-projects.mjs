@@ -25,7 +25,7 @@ for (const dir of readdirSync(join(root, "projects"), {withFileTypes: true})) {
   const assetSource = join(source, "assets");
   const hasAssets = existsSync(assetSource);
   const abi = meta.abi ?? (hasAssets ? 3 : 2);
-  if (!Number.isInteger(abi) || abi < 2 || abi > 7 || (hasAssets && abi < 3)) throw new Error(`${meta.id}: unsupported project ABI ${abi}.`);
+  if (!Number.isInteger(abi) || abi < 2 || abi > 8 || (hasAssets && abi < 3)) throw new Error(`${meta.id}: unsupported project ABI ${abi}.`);
   const destination = join(root, "public/projects", board, meta.id);
   mkdirSync(destination, {recursive: true});
   const binary = join(destination, `${meta.version}.elf`);

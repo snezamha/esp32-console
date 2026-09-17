@@ -337,6 +337,7 @@ function ProjectTabPanel({
       {storage && <SdCardNotice device={device} bytes={storage.bytes} />}
       {firmwareTooOld && <p className="text-xs text-amber-600">Update the base firmware to v{requiredFirmware} or newer before loading this project.</p>}
       {project.id !== "none" && <ProjectSettingsForm project={project as ProjectDefinition} value={config} disabled={busy} onChange={onConfig} />}
+      {project.id === "board-control-api" && <p className="text-xs text-zinc-500">Generate a token, test requests and read the full guide in the Board API tab.</p>}
       {project.id === "none" && <p className="text-xs text-zinc-500">Restore the original firmware display while keeping your board settings. No additional file is required.</p>}
       {saved?.project === project.id && <p role="status" className="text-xs text-emerald-600">{saved.message}</p>}
       <div className="flex flex-wrap gap-2">

@@ -23,6 +23,7 @@ export async function POST(request: Request) {
   if (!user) return unauthorized();
   const body = await request.json().catch(() => null);
   const code = typeof body?.code === "string" ? body.code.trim() : "";
+  const relinkId = typeof body?.relinkId === "string" ? body.relinkId : undefined;
   if (!/^\d{6}$/.test(code)) {
     return Response.json({ error: "Enter the 6-digit code shown on the device." }, { status: 400 });
   }
@@ -33,7 +34,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Too many wrong codes. Try again in a few minutes." }, { status: 429 });
   }
 
-  const device = await claimCode(user.id, code);
+  let device;
+  try {
+    device = await claimCode(user.id, code, relinkId);
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Could not reconnect this device." }, { status: 409 });
+  }
   if (!device) {
     failedClaims.set(user.id, [...failures, now]);
     return Response.json(

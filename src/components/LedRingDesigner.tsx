@@ -3,7 +3,7 @@
 import { Button } from "@headlessui/react";
 import { useEffect, useState } from "react";
 import { Select } from "@/components/Select";
-import { Slider, Toggle, secondaryButton } from "@/components/ui";
+import { Sheet, Slider, Toggle, accentButton, inputClass, secondaryButton } from "@/components/ui";
 import { LED_COUNT, LED_MODES, type DeviceSettings, type LedMode } from "@/lib/device-settings";
 import { LED_PALETTE, formatPixels, isAnimated, parsePixels, renderFrame, type LedPixel } from "@/lib/led-pattern";
 
@@ -29,23 +29,23 @@ const PRESETS: { label: string; mode: LedMode; pixels: (i: number) => LedPixel }
 const BOARD_WIDTH = 240;
 const BOARD_HEIGHT = 210;
 
-// Physical positions on the 46 x 40 mm board, viewed from the display side with USB at the bottom.
-// The data chain starts at the upper-left LED and follows the perimeter clockwise.
+// Eight LEDs around the display: three on each side, with each corner shared by two sides.
+// LED 1 is upper left and numbering follows the perimeter clockwise (USB at the bottom).
 const LED_POSITIONS = [
-  { x: 55, y: 38 },
-  { x: 98, y: 38 },
-  { x: 142, y: 38 },
-  { x: 185, y: 38 },
-  { x: 185, y: 172 },
-  { x: 142, y: 172 },
-  { x: 98, y: 172 },
-  { x: 55, y: 172 },
+  { x: 55, y: 42, labelX: 55, labelY: 24 },
+  { x: 120, y: 42, labelX: 120, labelY: 24 },
+  { x: 185, y: 42, labelX: 185, labelY: 24 },
+  { x: 185, y: 105, labelX: 208, labelY: 108 },
+  { x: 185, y: 168, labelX: 185, labelY: 193 },
+  { x: 120, y: 168, labelX: 120, labelY: 193 },
+  { x: 55, y: 168, labelX: 55, labelY: 193 },
+  { x: 55, y: 105, labelX: 32, labelY: 108 },
 ] as const;
 
-/** Ring simulator: pick LEDs, give each a color, level and blink, and choose a ring effect. */
+/** Shared ring simulator for Configure and the Board API workbench. */
 export function LedRingDesigner({ value, onChange }: { value: LedSettings; onChange: (next: Partial<LedSettings>) => void }) {
   const pixels = parsePixels(value.led_pixels, value.led_color);
-  const [selected, setSelected] = useState<number[]>([0]);
+  const [editing, setEditing] = useState<number | null>(null);
   const [now, setNow] = useState(0);
   const animated = value.led_on && isAnimated(value.led_mode, pixels);
 
@@ -59,16 +59,21 @@ export function LedRingDesigner({ value, onChange }: { value: LedSettings; onCha
   }, [animated]);
 
   const frame = renderFrame(value.led_mode, pixels, value.led_speed, value.led_brightness, now);
-  const first = pixels[selected[0]] ?? pixels[0];
-  const update = (patch: Partial<LedPixel>) =>
-    onChange({ led_on: true, led_pixels: formatPixels(pixels.map((pixel, i) => (selected.includes(i) ? { ...pixel, ...patch } : pixel))) });
-  const toggle = (index: number) =>
-    setSelected((current) => (current.includes(index) ? current.filter((i) => i !== index) : [...current, index].sort((a, b) => a - b)));
+  const editPixel = (index: number, patch: Partial<LedPixel>) =>
+    onChange({ led_on: true, led_pixels: formatPixels(pixels.map((pixel, i) => i === index ? { ...pixel, ...patch } : pixel)) });
+  const selectedPixel = editing === null ? null : pixels[editing];
+  const rgb = selectedPixel ? [0, 2, 4].map((start) => parseInt(selectedPixel.color.slice(start, start + 2), 16)) : [];
+  const editChannel = (channel: number, input: number) => {
+    if (editing === null || !Number.isFinite(input)) return;
+    const next = [...rgb];
+    next[channel] = Math.max(0, Math.min(255, Math.round(input)));
+    editPixel(editing, { color: next.map((part) => part.toString(16).padStart(2, "0")).join("") });
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-        <svg viewBox={`0 0 ${BOARD_WIDTH} ${BOARD_HEIGHT}`} className="w-60 max-w-full shrink-0" role="group" aria-label="LED layout on the ESP32-S3-LCD-0.85 board">
+      <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+        <svg viewBox={`0 0 ${BOARD_WIDTH} ${BOARD_HEIGHT}`} className="w-60 max-w-full shrink-0" role="group" aria-label="LED layout on the ESP32-S3-LCD-0.85 board; select an LED to edit it">
           <defs>
             <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor="#0b2940" />
@@ -87,43 +92,32 @@ export function LedRingDesigner({ value, onChange }: { value: LedSettings; onCha
           <text x={120} y={108} textAnchor="middle" className="fill-zinc-500 text-[9px]">128 × 128</text>
           <path d="M108 202h24v5h-24z" className="fill-slate-400 stroke-slate-600" />
           {pixels.map((_, i) => {
-            const { x, y } = LED_POSITIONS[i];
+            const { x, y, labelX, labelY } = LED_POSITIONS[i];
             const lit = value.led_on ? frame[i] : { color: "000000", intensity: 0 };
             // Scaled for the screen: the real LEDs are far brighter than a monitor at low levels.
             const shown = lit.intensity > 0 ? 0.25 + 0.75 * Math.sqrt(lit.intensity) : 0;
-            const isSelected = selected.includes(i);
             return (
-              <g key={i} onClick={() => toggle(i)} className="cursor-pointer" role="checkbox" aria-checked={isSelected} aria-label={`LED ${i + 1}`} tabIndex={0} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(i); } }}>
+              <g key={i} onClick={() => setEditing(i)} className="cursor-pointer outline-none" role="button" aria-haspopup="dialog" aria-label={`Edit LED ${i + 1}, color #${pixels[i].color}`} tabIndex={0} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setEditing(i); } }}>
+                <circle cx={x} cy={y} r={20} fill="transparent" />
                 {shown > 0 && <circle cx={x} cy={y} r={20} fill={`#${lit.color}`} opacity={shown * 0.35} />}
                 <rect x={x - 8} y={y - 8} width={16} height={16} rx={2} className="fill-zinc-200 stroke-zinc-500" strokeWidth={1} />
                 <rect x={x - 5} y={y - 5} width={10} height={10} rx={1.5} fill={`#${lit.color}`} fillOpacity={shown} className="stroke-zinc-600" strokeWidth={0.75} />
-                {isSelected && <rect x={x - 12} y={y - 12} width={24} height={24} rx={6} fill="none" className="stroke-blue-400" strokeWidth={2.5} />}
-                <text x={x} y={i < 4 ? y + 22 : y - 17} textAnchor="middle" className="fill-slate-400 text-[8px]">{i + 1}</text>
+                {editing === i && <rect x={x - 12} y={y - 12} width={24} height={24} rx={6} fill="none" className="stroke-blue-400" strokeWidth={2.5} />}
+                <text x={labelX} y={labelY} textAnchor="middle" className="fill-slate-400 text-[9px]">{i + 1}</text>
               </g>
             );
           })}
         </svg>
         <div className="w-full min-w-0 space-y-3">
-          <p className="text-xs text-zinc-500">
-            Tap LEDs to select them. {selected.length ? `${selected.length} selected: ${selected.map((i) => i + 1).join(", ")}` : "None selected."} LED 1 is the ring’s first LED; numbering runs clockwise.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setSelected(pixels.map((_, i) => i))} className={secondaryButton + " h-8 px-3 text-xs"}>Select all</Button>
-            <Button onClick={() => setSelected([])} className={secondaryButton + " h-8 px-3 text-xs"}>Clear</Button>
+          <p className="text-xs text-zinc-500">Eight LEDs surround the display. Each side has three LEDs, counting its corners. Tap a light or its numbered button to edit it.</p>
+          <div className="grid grid-cols-4 gap-2">
+            {pixels.map((pixel, index) => <Button key={index} onClick={() => setEditing(index)} className={secondaryButton + " flex min-w-0 flex-col items-center gap-1 px-1 py-2 text-xs"} aria-label={`Edit LED ${index + 1}`}>
+              <span className="size-5 rounded-full border border-zinc-300 dark:border-zinc-600" style={{ backgroundColor: `#${pixel.color}` }} />
+              <span>LED {index + 1}</span>
+              <span className="text-[10px] text-zinc-500">{pixel.level}%</span>
+            </Button>)}
           </div>
-          <div className={selected.length ? "space-y-3" : "pointer-events-none space-y-3 opacity-50"}>
-            <div className="flex flex-wrap items-center gap-2">
-              {LED_PALETTE.map((color) => (
-                <button key={color} type="button" aria-label={`Color #${color}`} onClick={() => update({ color })} className="size-7 rounded-full border border-zinc-300 dark:border-zinc-600" style={{ background: `#${color}` }} />
-              ))}
-              <label className="flex items-center gap-1 text-xs text-zinc-500">
-                <input type="color" value={`#${first.color}`} onChange={(e) => update({ color: e.target.value.slice(1).toLowerCase() })} className="size-8 cursor-pointer rounded border-0 bg-transparent" />
-                Custom
-              </label>
-            </div>
-            <Slider label="Selected LED level" value={first.level} min={0} max={100} step={5} unit="%" onChange={(level) => update({ level })} />
-            <Toggle label="Blink selected LEDs" checked={first.blink} onChange={(blink) => update({ blink })} />
-          </div>
+          <p className="text-xs text-zinc-500">LED 1 is at the upper left. Numbers run clockwise.</p>
         </div>
       </div>
       <Select
@@ -146,6 +140,32 @@ export function LedRingDesigner({ value, onChange }: { value: LedSettings; onCha
           </Button>
         ))}
       </div>
+      <Sheet
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title={`LED ${editing === null ? "" : editing + 1}`}
+        subtitle="Choose this LED's RGB color, intensity and blink. Changes appear in the preview immediately."
+        footer={<>
+          <Button onClick={() => setEditing((current) => current === null ? null : (current + LED_COUNT - 1) % LED_COUNT)} className={secondaryButton + " h-10 px-3"}>Previous</Button>
+          <Button onClick={() => setEditing((current) => current === null ? null : (current + 1) % LED_COUNT)} className={secondaryButton + " h-10 px-3"}>Next</Button>
+          <Button onClick={() => setEditing(null)} className={accentButton + " h-10 px-4"}>Done</Button>
+        </>}
+      >
+        {selectedPixel && editing !== null && <div className="space-y-5 pb-1">
+          <div className="flex items-center gap-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+            <span className="size-11 shrink-0 rounded-full border border-zinc-300 dark:border-zinc-600" style={{ backgroundColor: `#${selectedPixel.color}` }} />
+            <div><p className="text-sm font-medium">LED {editing + 1}</p><p className="font-mono text-xs text-zinc-500">#{selectedPixel.color.toUpperCase()} · {selectedPixel.level}%{selectedPixel.blink ? " · blinking" : ""}</p></div>
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-zinc-500">Quick colors</p>
+            <div className="flex flex-wrap gap-2">{LED_PALETTE.map((color) => <Button key={color} onClick={() => editPixel(editing, { color })} aria-label={`Set LED ${editing + 1} to #${color}`} aria-pressed={selectedPixel.color === color} className={`size-10 rounded-full border-2 ${selectedPixel.color === color ? "border-blue-500 ring-2 ring-blue-500/30" : "border-zinc-300 dark:border-zinc-600"}`} style={{ backgroundColor: `#${color}` }} />)}</div>
+          </div>
+          <label className="flex items-center gap-3 text-sm"><span className="min-w-20">Custom RGB</span><input type="color" value={`#${selectedPixel.color}`} onChange={(event) => editPixel(editing, { color: event.target.value.slice(1).toLowerCase() })} className="size-11 cursor-pointer" /><span className="font-mono text-xs text-zinc-500">#{selectedPixel.color.toUpperCase()}</span></label>
+          <div className="grid grid-cols-3 gap-3">{(["Red", "Green", "Blue"] as const).map((name, channel) => <label key={name} className="space-y-1 text-xs font-medium text-zinc-500"><span>{name}</span><input type="number" min={0} max={255} value={rgb[channel]} onChange={(event) => editChannel(channel, Number(event.target.value))} className={inputClass + " tabular-nums"} /></label>)}</div>
+          <Slider label="LED intensity" value={selectedPixel.level} min={0} max={100} step={1} unit="%" onChange={(level) => editPixel(editing, { level })} />
+          <Toggle label="Blink this LED" checked={selectedPixel.blink} onChange={(blink) => editPixel(editing, { blink })} />
+        </div>}
+      </Sheet>
     </div>
   );
 }

@@ -1,0 +1,13 @@
+{
+  "id": "board-control-api",
+  "name": "Board control API",
+  "version": "1.0.5",
+  "abi": 8,
+  "description": "Control display, volume, LED ring and speaker through a private JSON API.",
+  "category": "Tools",
+  "icon": "api",
+  "accent": "#14b8a6",
+  "minimumFirmware": "1.1.27",
+  "capabilities": ["internet", "speaker"],
+  "settings": []
+}

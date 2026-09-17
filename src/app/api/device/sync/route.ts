@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, formatSettingValue, sanitizeSettings } from "@/lib/device-settings";
-import { projectSettingsForBoard, syncBoard, type SyncResult } from "@/lib/device-store";
+import { controlRequestForBoard, projectSettingsForBoard, syncBoard, type SyncResult } from "@/lib/device-store";
 import { weatherPayload } from "@/lib/weather";
 import type { ProjectPhase } from "@/lib/project-transfers";
 import type { TestResult } from "@/lib/device-types";
@@ -14,10 +14,10 @@ const OTA_STATES = ["downloading", "done", "failed"];
 /**
  * Board check-in, called by the firmware while Wi-Fi is up.
  *
- * Request: form fields
+ * Request: `Authorization: Bearer <token>` header once linked (revoke and poll requests alike),
+ * plus form fields:
  *   secret      random hex generated at boot (identifies the pairing while unlinked)
  *   code        pairing code the board currently shows
- *   token       device token once linked
  *   mac, board, fw, ip, rssi, battery, battery_mv, charging, heap, uptime, rev
  *   s.<key>     current value of each setting in DeviceSettings
  *   sd          SD card: <mounted 0|1>|<total bytes>|<free bytes>
@@ -50,6 +50,10 @@ export async function POST(request: Request) {
     const value = parseInt(field(name), 10);
     return Number.isFinite(value) ? value : fallback;
   };
+  const bearer = request.headers.get("authorization")?.match(/^Bearer ([0-9a-f]{16,64})$/i)?.[1] ?? "";
+  const formToken = field("token"); // Older firmware sent its token in the form body.
+  if (bearer && formToken && bearer !== formToken) return reply(["status=error", "error=conflicting token"], 400);
+  const token = bearer || formToken;
 
   const reported: Record<string, unknown> = {};
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -77,6 +81,7 @@ export async function POST(request: Request) {
     .filter((ack) => ack.id);
 
   const [projectId, projectPhase, projectProgress, projectBytes, projectTotal] = field("p.status", 160).split("|");
+  const [controlId, controlOutcome, ...controlResult] = field("control_ack", 180).split("|");
   const phases = ["connecting", "downloading", "verifying", "writing", "activating", "done", "failed", "cancelled"];
   const projectLogs = form.getAll("p.log").slice(-40).map(String).map((line) => {
     const [id, seq, level, ...message] = line.split("|");
@@ -84,7 +89,7 @@ export async function POST(request: Request) {
   }).filter((log) => log.id && Number.isFinite(log.seq));
   const report = {
     secret: field("secret").toLowerCase(),
-    token: field("token"),
+    token,
     code: field("code", 6),
     mac: field("mac", 17).toUpperCase(),
     board: field("board"),
@@ -117,6 +122,8 @@ export async function POST(request: Request) {
       : null,
     networks: form.has("wifi1") ? [field("wifi1", 32), field("wifi2", 32)] : null,
     acks,
+    controlAck: /^[0-9a-f]{16}$/.test(controlId) && ["ok", "fail"].includes(controlOutcome)
+      ? { id: controlId, ok: controlOutcome === "ok", result: controlResult.join("|").slice(0, 120) } : null,
     unlink: field("unlink") === "1",
   };
 
@@ -149,6 +156,10 @@ export async function POST(request: Request) {
           .join("|");
         lines.push(`project_data=${encodeURIComponent(`${config.station}|${custom}`)}`);
       }
+    }
+    if (settings.project === "board-control-api") {
+      const control = await controlRequestForBoard(report.token);
+      if (control) lines.push(`project_data=${encodeURIComponent(`${control.id}|${control.audio?.type ?? "settings"}|${control.audio?.value ?? ""}`)}`);
     }
   }
   return reply(lines);

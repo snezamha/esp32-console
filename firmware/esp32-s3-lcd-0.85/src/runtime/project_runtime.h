@@ -77,6 +77,8 @@ class ProjectRuntime {
   std::string id_ = "none";
   std::string version_, sha256_;
   std::string data_[2];
+  std::string control_ack_id_, control_ack_result_;
+  bool control_ack_ok_ = false;
   uint32_t data_at_ = 0;
   std::atomic<bool> busy_{false}, done_{false};
   std::atomic<int> progress_{0}, stage_{0};

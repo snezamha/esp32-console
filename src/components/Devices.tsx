@@ -35,6 +35,7 @@ export function Devices({ active }: { active: boolean }) {
   const [connection, setConnection] = useState<"connecting" | "live" | "retrying">("connecting");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [relinkId, setRelinkId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [query, setQuery] = useState("");
   const [toast, setToast] = useToast();
@@ -94,6 +95,7 @@ export function Devices({ active }: { active: boolean }) {
   if (!user) return <AuthCard />;
 
   const current = dialog ? devices?.find((d) => d.id === dialog.id) : undefined;
+  const relinkDevice = devices?.find((device) => device.id === relinkId);
 
   const command = async (device: PublicDevice, body: Record<string, string>, done: string) => {
     try {
@@ -202,6 +204,7 @@ export function Devices({ active }: { active: boolean }) {
             key={device.id}
             device={device}
             onDialog={setDialog}
+            onReconnect={() => setRelinkId(device.id)}
             onIdentify={() => command(device, { type: "identify" }, "Identifying")}
           />
         ));
@@ -210,11 +213,16 @@ export function Devices({ active }: { active: boolean }) {
       <ToastBanner toast={toast} />
 
       <AddDeviceDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
+        open={addOpen || Boolean(relinkDevice)}
+        relinkDevice={relinkDevice}
+        onClose={() => { setAddOpen(false); setRelinkId(null); }}
         onAdded={(device) => {
+          setDevices((current) => current?.some((entry) => entry.id === device.id)
+            ? current.map((entry) => entry.id === device.id ? device : entry)
+            : [...(current ?? []), device]);
           setAddOpen(false);
-          setToast(`${deviceName(device)} added`);
+          setRelinkId(null);
+          setToast(`${deviceName(device)} ${relinkDevice ? "reconnected" : "added"}`);
         }}
       />
 
@@ -260,10 +268,12 @@ export function Devices({ active }: { active: boolean }) {
 function DeviceCard({
   device,
   onDialog,
+  onReconnect,
   onIdentify,
 }: {
   device: PublicDevice;
   onDialog: (dialog: Dialog) => void;
+  onReconnect: () => void;
   onIdentify: () => void;
 }) {
   const name = deviceName(device);
@@ -299,6 +309,9 @@ function DeviceCard({
             </svg>
           </MenuButton>
           <MenuItems anchor="bottom end" className={menuItemsClass}>
+            {(!device.online || device.pairingAvailable) && <MenuItem>
+              <button onClick={onReconnect} className={menuItemClass}>Reconnect with code</button>
+            </MenuItem>}
             <MenuItem>
               <button onClick={onIdentify} className={menuItemClass}>
                 Identify (beep & flash)
@@ -346,6 +359,11 @@ function DeviceCard({
           </MenuItems>
         </Menu>
       </div>
+
+      {device.pairingAvailable && <div className="mx-4 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+        <span>This board is showing a new pairing code. Reconnect it to keep its settings and history.</span>
+        <Button onClick={onReconnect} className="font-semibold underline">Enter code</Button>
+      </div>}
 
       <dl className="mx-4 grid grid-cols-3 divide-x divide-zinc-200 rounded-xl bg-zinc-50 py-2.5 text-xs dark:divide-zinc-800 dark:bg-zinc-800/50">
         <Stat label="Model" value={boardName(device.board)} />

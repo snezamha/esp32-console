@@ -98,6 +98,8 @@ export type PublicDevice = {
   /** Saved Wi-Fi networks: [primary, backup]. */
   networks: string[];
   online: boolean;
+  /** This board contacted the console without a valid pairing token and is showing a code. */
+  pairingAvailable: boolean;
   /** Console edits have not reached the board yet. */
   syncing: boolean;
 };

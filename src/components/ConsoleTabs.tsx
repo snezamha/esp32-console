@@ -7,12 +7,14 @@ import { Flasher } from "@/components/Flasher";
 
 import { Projects } from "@/components/Projects";
 import { ProjectBuilder } from "@/components/ProjectBuilder";
+import { BoardApiWorkbench } from "@/components/BoardApiWorkbench";
 
 const TABS = [
   { id: "flash", name: "Flash firmware" },
   { id: "devices", name: "Devices" },
   { id: "projects", name: "Projects" },
   { id: "builder", name: "Project Builder" },
+  { id: "board-api", name: "Board API" },
 ] as const;
 
 export function ConsoleTabs() {
@@ -36,7 +38,7 @@ export function ConsoleTabs() {
   };
   return (
     <TabGroup selectedIndex={tab} onChange={selectTab} className="flex flex-1 flex-col">
-      <TabList className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-200/60 p-1 sm:grid-cols-4 dark:bg-zinc-900">
+      <TabList className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-200/60 p-1 sm:grid-cols-5 dark:bg-zinc-900">
         {TABS.map(({ id, name }) => (
           <Tab
             key={id}
@@ -59,6 +61,9 @@ export function ConsoleTabs() {
         </TabPanel>
         <TabPanel unmount={false} className="flex flex-1 flex-col">
           <ProjectBuilder active={tab === 3} />
+        </TabPanel>
+        <TabPanel unmount={false} className="flex flex-1 flex-col">
+          <BoardApiWorkbench active={tab === 4} />
         </TabPanel>
       </TabPanels>
     </TabGroup>

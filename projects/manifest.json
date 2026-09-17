@@ -56,6 +56,27 @@
       "sha256": "ee6c1de11a2af318cbd7e71e4a9c0837cbd26e3f1c73558203422d1eaa72364c"
     },
     {
+      "id": "board-control-api",
+      "name": "Board control API",
+      "version": "1.0.5",
+      "abi": 8,
+      "description": "Control display, volume, LED ring and speaker through a private JSON API.",
+      "category": "Tools",
+      "icon": "api",
+      "accent": "#14b8a6",
+      "minimumFirmware": "1.1.27",
+      "capabilities": [
+        "internet",
+        "speaker"
+      ],
+      "settings": [],
+      "board": "esp32-s3-lcd-0.85",
+      "path": "/projects/esp32-s3-lcd-0.85/board-control-api/1.0.5.elf",
+      "size": 3952,
+      "md5": "56b81e2c4452d8f91e351620e3de3138",
+      "sha256": "f91014ce0f791f6d5c77ccd3d435668ff797224f8474c47fead02f0c10e1d0ed"
+    },
+    {
       "id": "radio",
       "name": "Internet radio",
       "version": "1.7.0",

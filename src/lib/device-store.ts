@@ -1,7 +1,8 @@
 import { expireProjectCommands, projectPending, type ProjectTransfer } from "@/lib/project-transfers";
-import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import type { Device as DeviceRow, Pairing as PairingRow, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { DEFAULT_MUSIC_URL } from "@/lib/board-control";
 import { DEFAULT_SETTINGS, type DeviceSettings } from "@/lib/device-settings";
 import { projectConfigsWithDefaults, type ProjectConfigs } from "@/lib/project-config";
 import type {
@@ -39,6 +40,23 @@ const FILE_TTL_MS = 30 * 60 * 1000;
 export const MAX_DEVICE_FILE_BYTES = 4 * 1024 * 1024;
 
 type PendingEdits = Partial<Record<keyof DeviceSettings, { value: DeviceSettings[keyof DeviceSettings]; rev: number }>>;
+export type ControlAudio = { type: "beep" | "music" | "clip" | "pause" | "play" | "stop"; value: string };
+export type ControlRequest = { id: string; status: "queued" | "sent" | "done" | "failed"; settings?: Partial<DeviceSettings>; audio?: ControlAudio; createdAt: number; updatedAt: number; result?: string };
+type ControlAccess = { hash: string; requests?: ControlRequest[]; music?: { type: "music" | "clip"; value: string; savedAt: number } };
+const CONTROL_KEY = "__board_control_api";
+const CONTROL_WAIT_MS = 90_000;
+const controlPending = (request: ControlRequest) => request.status === "queued" || request.status === "sent";
+function expireControlRequests(requests: ControlRequest[], now: number): ControlRequest[] {
+  return requests.map((request) => controlPending(request) && now - request.createdAt > CONTROL_WAIT_MS
+    ? { ...request, status: "failed" as const, result: request.status === "sent" ? "The board did not confirm this action before its timeout." : "The board did not connect before this request expired.", updatedAt: now }
+    : request);
+}
+const controlState = (row: DeviceRow): ControlAccess =>
+  (((row.projectSettings ?? {}) as Record<string, unknown>)[CONTROL_KEY] as ControlAccess | undefined) ?? { hash: "" };
+const keyHash = (key: string) => createHash("sha256").update(key).digest("hex");
+const sameKey = (expected: string, key: string) =>
+  /^[0-9a-f]{64}$/.test(expected) && /^[0-9a-f]{64}$/.test(key) &&
+  timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(keyHash(key), "hex"));
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 function sleep(ms: number, signal: AbortSignal) {
@@ -98,6 +116,7 @@ function toPublic(row: DeviceRow): PublicDevice {
     ota,
     networks: row.networks as string[],
     online: Date.now() - row.lastSeen.getTime() < ONLINE_WINDOW_MS,
+    pairingAvailable: false,
     syncing: Object.keys(pending).length > 0,
   };
 }
@@ -164,6 +183,7 @@ export type BoardReport = {
   ota: Pick<OtaStatus, "state" | "progress" | "error"> | null;
   networks: string[] | null;
   acks: { id: string; ok: boolean; result: string }[];
+  controlAck?: { id: string; ok: boolean; result: string } | null;
   projectStatus: { id: string; phase: ProjectTransfer["phase"]; progress: number; bytes: number; total: number } | null;
   projectLogs: { id: string; seq: number; level: "info" | "error"; message: string }[];
   fileProgress: ({ id: string } & FileProgress) | null;
@@ -189,6 +209,15 @@ function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.Dev
     uptime: report.uptime,
   };
   if (report.firmware) data.firmware = report.firmware;
+
+  const control = controlState(row);
+  if (control.requests?.length) {
+    let requests = expireControlRequests(control.requests, now.getTime());
+    if (report.controlAck) requests = requests.map((request) => request.id === report.controlAck!.id && request.status === "sent"
+      ? { ...request, status: report.controlAck!.ok ? "done" as const : "failed" as const, result: report.controlAck!.result, updatedAt: now.getTime() }
+      : request);
+    if (JSON.stringify(requests) !== JSON.stringify(control.requests)) data.projectSettings = json({ ...(row.projectSettings as object), [CONTROL_KEY]: { ...control, requests } });
+  }
 
   const pending = { ...(row.pending as PendingEdits) };
   for (const key of Object.keys(pending) as (keyof DeviceSettings)[]) {
@@ -332,10 +361,12 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
     const now = new Date();
     let row: DeviceRow = (await mutateDevice(deviceId, (current) => applyReport(current, report, now)))!;
     let delivery = pickDelivery(row);
+    const controlRequestId = controlState(row).requests?.find(controlPending)?.id;
+    const controlReady = Boolean(controlRequestId);
 
     // While an SD operation runs, answer at once: the board's next check-in carries its progress
     // and result, and holding this request would delay both by up to `waitMs`.
-    if (idle(delivery) && waitMs > 0 && !(row.commands as DeviceCommand[]).some((command) => fileJobPending(command) && command.status === "sent")) {
+    if (idle(delivery) && !controlReady && waitMs > 0 && !(row.commands as DeviceCommand[]).some((command) => fileJobPending(command) && command.status === "sent")) {
       const deadline = Date.now() + waitMs;
       while (Date.now() < deadline && !signal.aborted) {
         await sleep(Math.min(POLL_INTERVAL_MS, deadline - Date.now()), signal);
@@ -344,8 +375,29 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
         if (fresh.version === row.version) continue;
         row = fresh;
         delivery = pickDelivery(row);
+        if (controlState(row).requests?.find(controlPending)?.id !== controlRequestId) break;
         if (!idle(delivery)) break;
       }
+    }
+
+    if ((row.reported as DeviceSettings).project === "board-control-api") {
+      const dispatched = await mutateDevice(deviceId, (current) => {
+        const state = controlState(current);
+        const requests = expireControlRequests(state.requests ?? [], Date.now());
+        if (requests.some((request) => request.status === "sent")) return JSON.stringify(requests) !== JSON.stringify(state.requests)
+          ? { projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { ...state, requests } }) } : null;
+        const first = requests.findIndex((request) => request.status === "queued");
+        if (first < 0) return JSON.stringify(requests) !== JSON.stringify(state.requests)
+          ? { projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { ...state, requests } }) } : null;
+        const request = requests[first];
+        const pending = { ...(current.pending as PendingEdits) };
+        const rev = current.rev + 1;
+        for (const [field, value] of Object.entries(request.settings ?? {})) pending[field as keyof DeviceSettings] = { value: value as DeviceSettings[keyof DeviceSettings], rev };
+        requests[first] = { ...request, status: "sent", updatedAt: Date.now() };
+        return { pending: json(pending), rev: request.settings ? rev : current.rev,
+          projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { ...state, requests } }) };
+      });
+      if (dispatched) { row = dispatched; delivery = pickDelivery(row); }
     }
 
     if (delivery.data) {
@@ -367,7 +419,7 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
   let pairing = await upsertPairing(report);
   if (waitMs > 0 && report.code === pairing.code) {
     const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline && !signal.aborted && !pairing.deviceId) {
+    while (Date.now() < deadline && !signal.aborted && (!pairing.deviceId || pairing.deviceId === "claiming")) {
       await sleep(Math.min(POLL_INTERVAL_MS, deadline - Date.now()), signal);
       const fresh = await db.pairing.findUnique({ where: { mac: report.mac } });
       if (!fresh || fresh.secret !== pairing.secret) break; // Expired or replaced under us.
@@ -375,13 +427,13 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
     }
   }
 
-  if (pairing.deviceId) {
+  if (pairing.deviceId && pairing.deviceId !== "claiming") {
     const device = await db.device.update({
       where: { id: pairing.deviceId },
       data: { lastSeen: new Date(), ip: report.ip, rssi: report.rssi },
     });
     await db.pairing.delete({ where: { mac: report.mac } }).catch(() => {});
-    return { status: "linked", token: device.token, name: device.name, rev: device.rev, settings: {}, commands: [] };
+    return { status: "linked", token: device.token, name: device.name, rev: 0, settings: {}, commands: [] };
   }
 
   return {
@@ -415,36 +467,70 @@ async function upsertPairing(report: BoardReport): Promise<PairingRow> {
 
 export async function listDevices(owner: string): Promise<PublicDevice[]> {
   const rows = await db.device.findMany({ where: { owner }, orderBy: { createdAt: "asc" } });
-  return rows.map(toPublic);
+  if (!rows.length) return [];
+  const pairings = await db.pairing.findMany({
+    where: { mac: { in: rows.map((row) => row.mac) }, deviceId: null, expiresAt: { gt: new Date() } },
+    select: { mac: true },
+  });
+  const waiting = new Set(pairings.map((pairing) => pairing.mac));
+  return rows.map((row) => ({ ...toPublic(row), pairingAvailable: waiting.has(row.mac) }));
 }
 
-/** Links the board showing `code` to `owner`. Returns null when no board shows that code. */
-export async function claimCode(owner: string, code: string): Promise<PublicDevice | null> {
+/** Claims a live code. A board already owned by this account keeps its identity and history. */
+export async function claimCode(owner: string, code: string, relinkId?: string): Promise<PublicDevice | null> {
+  const pairing = await db.pairing.findFirst({ where: { code, deviceId: null, expiresAt: { gt: new Date() } } });
+  if (!pairing) return null;
+  if (relinkId && !(await db.device.findFirst({ where: { id: relinkId, owner, mac: pairing.mac } }))) {
+    throw new Error("This code belongs to a different board. Check the selected device.");
+  }
   // Atomic claim: only one caller can win a given code. This placeholder is never a real device
   // id (those are UUIDs); it is replaced by the real one once the device row exists (below).
   const CLAIMING = "claiming";
-  const { count } = await db.pairing.updateMany({ where: { code, deviceId: null }, data: { deviceId: CLAIMING } });
-  if (count !== 1) return null;
-  const pairing = await db.pairing.findFirst({ where: { code } });
-  if (!pairing) return null; // Expired between the claim and this read; extremely unlikely.
-
-  return db.$transaction(async (tx) => {
-    // Re-adding a board replaces its previous record, whoever owned it.
-    await tx.device.deleteMany({ where: { mac: pairing.mac } });
-    const device = await tx.device.create({
-      data: {
-        id: randomUUID(),
-        owner,
-        token: randomBytes(24).toString("hex"),
-        mac: pairing.mac,
-        board: pairing.board,
-        firmware: pairing.firmware,
-        reported: json(DEFAULT_SETTINGS),
-      },
-    });
-    await tx.pairing.update({ where: { mac: pairing.mac }, data: { deviceId: device.id } });
-    return toPublic(device);
+  const { count } = await db.pairing.updateMany({
+    where: { mac: pairing.mac, code, secret: pairing.secret, deviceId: null, expiresAt: { gt: new Date() } },
+    data: { deviceId: CLAIMING },
   });
+  if (count !== 1) return null;
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const owned = await tx.device.findFirst({ where: { mac: pairing.mac, owner } });
+      if (relinkId && owned?.id !== relinkId) throw new Error("The selected device no longer matches this code.");
+      let device: DeviceRow;
+      if (owned) {
+        const rev = owned.rev + 1;
+        const desired = effectiveSettings(owned);
+        const pending: PendingEdits = {};
+        for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof DeviceSettings)[]) {
+          if (["project", "weather_lat", "weather_lon", "weather_unit", "project_seconds"].includes(key)) continue;
+          pending[key] = { value: desired[key], rev };
+        }
+        const now = Date.now();
+        const commands = (owned.commands as DeviceCommand[]).map((command) =>
+          command.status === "queued" || command.status === "sent"
+            ? { ...command, status: "failed" as const, result: "Board paired again; retry this action.", updatedAt: now }
+            : command);
+        device = await tx.device.update({ where: { id: owned.id }, data: {
+          token: randomBytes(24).toString("hex"), rev, version: { increment: 1 },
+          board: pairing.board, firmware: pairing.firmware, lastSeen: new Date(),
+          pending: json(pending), commands: json(commands), settingsReported: false,
+        } });
+      } else {
+        // A verified code may transfer the board from another account, but never its private
+        // settings, history or API token.
+        await tx.device.deleteMany({ where: { mac: pairing.mac } });
+        device = await tx.device.create({ data: {
+          id: randomUUID(), owner, token: randomBytes(24).toString("hex"), mac: pairing.mac,
+          board: pairing.board, firmware: pairing.firmware, reported: json(DEFAULT_SETTINGS),
+        } });
+      }
+      await tx.pairing.update({ where: { mac: pairing.mac }, data: { deviceId: device.id } });
+      return toPublic(device);
+    });
+  } catch (error) {
+    await db.pairing.updateMany({ where: { mac: pairing.mac, code, secret: pairing.secret, deviceId: CLAIMING }, data: { deviceId: null } });
+    throw error;
+  }
 }
 
 export async function updateDevice(
@@ -480,11 +566,87 @@ export async function updateDevice(
     }
     if (patch.projectSettings) {
       const currentProjects = projectConfigsWithDefaults(current.projectSettings, currentSettings);
-      data.projectSettings = json({ ...currentProjects, [patch.projectSettings.project]: patch.projectSettings.values });
+      data.projectSettings = json({ ...(current.projectSettings as object), ...currentProjects, [patch.projectSettings.project]: patch.projectSettings.values });
     }
     return Object.keys(data).length ? data : null;
   });
   return row ? toPublic(row) : null;
+}
+
+/** A separate API key; the board's own pairing token never leaves the firmware. */
+export async function rotateControlKey(owner: string, id: string) {
+  const key = randomBytes(32).toString("hex");
+  const row = await mutateDevice(id, (current) => current.owner === owner && current.reported &&
+    (current.reported as DeviceSettings).project === "board-control-api"
+    ? { projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { hash: keyHash(key) } }) }
+    : null);
+  return row && row.owner === owner && (row.reported as DeviceSettings).project === "board-control-api" ? key : null;
+}
+
+export async function controlKeyEnabled(owner: string, id: string) {
+  const row = await db.device.findFirst({ where: { id, owner } });
+  return row ? Boolean(controlState(row).hash) : null;
+}
+
+export async function revokeControlKey(owner: string, id: string) {
+  const row = await mutateDevice(id, (current) => current.owner === owner
+    ? { projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { hash: "" } }) }
+    : null);
+  return row?.owner === owner;
+}
+
+export async function controlDevice(id: string, key: string): Promise<PublicDevice | null> {
+  if (!/^[0-9a-f]{64}$/.test(key)) return null;
+  const row = await db.device.findUnique({ where: { id } });
+  if (!row || !sameKey(controlState(row).hash, key) || (row.reported as DeviceSettings).project !== "board-control-api") return null;
+  return toPublic(row);
+}
+
+export async function updateControlDevice(id: string, key: string, settings?: Partial<DeviceSettings>, audio?: ControlAudio): Promise<ControlRequest | null> {
+  const idempotentId = randomBytes(8).toString("hex");
+  const row = await mutateDevice(id, (current) => {
+    if (!sameKey(controlState(current).hash, key) || (current.reported as DeviceSettings).project !== "board-control-api") return null;
+    const state = { ...controlState(current) };
+    const requests = expireControlRequests(state.requests ?? [], Date.now());
+    if (requests.filter(controlPending).length >= 10) throw new Error("Control request queue is full. Wait for earlier actions.");
+    if (audio) {
+      let action = audio;
+      let music = state.music;
+      if (audio.type === "pause" && !music) throw new Error("No music to pause. Send music first.");
+      if (audio.type === "play") {
+        if (!music) music = { type: "music", value: DEFAULT_MUSIC_URL, savedAt: Date.now() };
+        if (music.type === "clip" && Date.now() - music.savedAt > 25 * 60_000) throw new Error("Uploaded MP3 expired. Send it again.");
+        action = { type: music.type, value: music.value };
+      }
+      if (audio.type === "music" || audio.type === "clip") music = { type: audio.type, value: audio.value, savedAt: Date.now() };
+      if (audio.type === "stop") music = undefined;
+      audio = action;
+      if (music) state.music = music;
+      else delete state.music;
+    }
+    const now = Date.now();
+    requests.push({ id: idempotentId, status: "queued", ...(settings ? { settings } : {}), ...(audio ? { audio } : {}), createdAt: now, updatedAt: now });
+    return { projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { ...state, requests: requests.slice(-20) } }) };
+  });
+  return row && sameKey(controlState(row).hash, key) && (row.reported as DeviceSettings).project === "board-control-api"
+    ? controlState(row).requests?.find((request) => request.id === idempotentId) ?? null : null;
+}
+
+export async function controlRequestForBoard(token: string): Promise<ControlRequest | null> {
+  const row = await db.device.findUnique({ where: { token } });
+  if (!row || (row.reported as DeviceSettings).project !== "board-control-api") return null;
+  return controlState(row).requests?.find((request) => request.status === "sent") ?? null;
+}
+
+export async function controlRequestStatus(id: string, key: string, requestId: string): Promise<ControlRequest | null> {
+  const row = await mutateDevice(id, (current) => {
+    if (!sameKey(controlState(current).hash, key)) return null;
+    const state = controlState(current);
+    const requests = expireControlRequests(state.requests ?? [], Date.now());
+    return JSON.stringify(requests) === JSON.stringify(state.requests) ? null
+      : { projectSettings: json({ ...(current.projectSettings as object), [CONTROL_KEY]: { ...state, requests } }) };
+  });
+  return row && sameKey(controlState(row).hash, key) ? controlState(row).requests?.find((request) => request.id === requestId) ?? null : null;
 }
 
 export async function queueCommand(

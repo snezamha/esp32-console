@@ -14,10 +14,12 @@ export function AddDeviceDialog({
   open,
   onClose,
   onAdded,
+  relinkDevice,
 }: {
   open: boolean;
   onClose: () => void;
   onAdded: (device: PublicDevice) => void;
+  relinkDevice?: PublicDevice | null;
 }) {
   const [digits, setDigits] = useState<string[]>(() => Array(CODE_LENGTH).fill(""));
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function AddDeviceDialog({
       const res = await fetch("/api/devices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, ...(relinkDevice ? { relinkId: relinkDevice.id } : {}) }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? `Could not add device (${res.status})`);
@@ -85,9 +87,11 @@ export function AddDeviceDialog({
         <DialogPanel transition className={dialogPanel}>
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
-              <DialogTitle className="text-base font-semibold">Add Device</DialogTitle>
+              <DialogTitle className="text-base font-semibold">{relinkDevice ? `Reconnect ${relinkDevice.name || relinkDevice.mac}` : "Add Device"}</DialogTitle>
               <p className="text-sm text-zinc-500">
-                An unlinked device shows a 6-digit verification code on its screen once it is connected to Wi-Fi.
+                {relinkDevice
+                  ? "Enter the new 6-digit code shown on this board. Its name, settings, API token and history stay with the existing device."
+                  : "An unlinked device shows a 6-digit verification code on its screen once it is connected to Wi-Fi."}
               </p>
             </div>
             <CloseButton onClick={close} />
@@ -135,7 +139,7 @@ export function AddDeviceDialog({
               Cancel
             </Button>
             <Button onClick={submit} disabled={code.length !== CODE_LENGTH || busy} className={accentButton + " h-10 min-w-20 px-4"}>
-              {busy ? "Adding…" : "Add"}
+              {busy ? "Connecting…" : relinkDevice ? "Reconnect" : "Add"}
             </Button>
           </div>
         </DialogPanel>

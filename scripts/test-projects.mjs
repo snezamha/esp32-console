@@ -47,7 +47,7 @@ for (const project of manifest.projects) {
   assert.throws(() => inspectProject(file.subarray(0, 100)));
   const abiMarker = file.indexOf(Buffer.from(`"abi":${project.abi}`));
   assert.ok(abiMarker >= 0);
-  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, true], [7, true], [8, false]]) {
+  for (const [abi, valid] of [[2, true], [3, true], [4, true], [5, true], [6, true], [7, true], [8, true], [9, false]]) {
     const changed = Buffer.from(file); changed[abiMarker + 6] = 48 + abi;
     if (valid) assert.equal(inspectProject(changed).abi, abi); else assert.throws(() => inspectProject(changed));
   }
@@ -86,7 +86,7 @@ const db = { device: {
     if (!matches(where)) return { count: 0 };
     const version = row.version + 1; row = { ...row, ...structuredClone(data), version }; return { count: 1 };
   },
-}, projectFile: {
+}, pairing: { findMany: async () => [] }, projectFile: {
   create: async ({ data }) => { const id = `file-${++nextFileId}`; storedFiles.set(id, { ...data, id }); return { id }; },
   findFirst: async ({ where }) => { const value = storedFiles.get(where.id); return value?.deviceId === where.deviceId ? value : null; },
   delete: async ({ where }) => { storedFiles.delete(where.id); },
@@ -94,7 +94,7 @@ const db = { device: {
 } };
 globalThis.__projectTest = { db, DEFAULT_SETTINGS, expireProjectCommands, projectPending: (c) => !!c && ["sent", "queued"].includes(c.status), projectConfigsWithDefaults: (raw) => raw ?? { weather: {}, "analog-clock": {} }, sanitizeProjectConfig: (_project, value) => value };
 let storeSource = ts.transpileModule(readFileSync("src/lib/device-store.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-storeSource = storeSource.replace(/import .* from "@\/lib\/project-transfers";/, "const { expireProjectCommands, projectPending } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/db";/, "const { db } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/project-config";/, "const { projectConfigsWithDefaults } = globalThis.__projectTest;");
+storeSource = storeSource.replace(/import .* from "@\/lib\/project-transfers";/, "const { expireProjectCommands, projectPending } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/db";/, "const { db } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/board-control";/, 'const DEFAULT_MUSIC_URL = "https://navairan.com/;stream.nsv";').replace(/import .* from "@\/lib\/device-settings";/, "const { DEFAULT_SETTINGS } = globalThis.__projectTest;").replace(/import .* from "@\/lib\/project-config";/, "const { projectConfigsWithDefaults } = globalThis.__projectTest;");
 const store = await import(`data:text/javascript;base64,${Buffer.from(storeSource).toString("base64")}`);
 row.firmware = "1.1.25";
 row.reported._project_api = 5;

@@ -5,12 +5,13 @@
 // Coordinates are relative to the content area. The host clips every primitive.
 // ABI 3 appends SD card asset access. ABI 4 appends controlled board I/O. ABI 5 appends
 // background MP3 radio playback. ABI 6 appends levels measured from decoded radio audio.
-// ABI 7 lets a project reserve the radio buttons while its station picker is open. Fields are only
+// ABI 7 lets a project reserve the radio buttons while its station picker is open.
+// ABI 8 reports completion or failure of a control action. Fields are only
 // appended, and the host sets `abi` to the version the module was built for, so older modules
 // keep working unchanged.
 // `pnpm projects:build` defines DISPLAY_PROJECT_ABI=2 for projects without SD card assets.
 #ifndef DISPLAY_PROJECT_ABI
-#define DISPLAY_PROJECT_ABI 7
+#define DISPLAY_PROJECT_ABI 8
 #endif
 #define DISPLAY_PROJECT_MIN_ABI 2
 #ifdef __cplusplus
@@ -97,6 +98,9 @@ struct ProjectFrame {
   int (*radio_spectrum)(uint8_t *levels, uint32_t capacity);
   // ABI 7: output. Set to 1 while a radio project's own station picker uses the buttons.
   int radio_menu_open;
+  // ABI 8: output for a control action. 0 pending, 1 completed, 2 failed.
+  int control_action_state;
+  const char *control_action_result;
 };
 #ifdef __cplusplus
 }

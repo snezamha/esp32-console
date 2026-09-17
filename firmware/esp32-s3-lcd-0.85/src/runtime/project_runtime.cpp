@@ -510,14 +510,19 @@ void ProjectRuntime::Log(const std::string& message, bool error) {
 }
 
 std::string ProjectRuntime::Report() {
-  if (command_id_.empty()) return "";
+  std::string control;
+  if (log_mutex_ && xSemaphoreTake(log_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (!control_ack_id_.empty()) control = "&control_ack=" + Encode(control_ack_id_ + "|" + (control_ack_ok_ ? "ok" : "fail") + "|" + control_ack_result_);
+    xSemaphoreGive(log_mutex_);
+  }
+  if (command_id_.empty()) return control;
   static const char* stages[] = {"connecting", "connecting", "downloading", "verifying", "writing", "activating", "done", "failed", "cancelled"};
   std::string body = "&p.status=" + Encode(command_id_ + "|" + stages[std::clamp(stage_.load(), 0, 8)] + "|" + std::to_string(progress_.load()) + "|" + std::to_string(received_.load()) + "|" + std::to_string(total_size_.load()));
   if (log_mutex_ && xSemaphoreTake(log_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
     for (const auto& log : logs_) body += "&p.log=" + Encode(command_id_ + "|" + std::to_string(log.seq) + "|" + (log.error ? "error" : "info") + "|" + log.message);
     xSemaphoreGive(log_mutex_);
   }
-  return body;
+  return body + control;
 }
 
 std::string ProjectRuntime::SdReport() const {
@@ -1033,7 +1038,12 @@ std::vector<std::string> ProjectRuntime::Loop() {
 void ProjectRuntime::SetData(const std::string& data) {
   const std::string bounded = data.substr(0, 512);
   const auto divider = bounded.find('|');
-  data_[0] = bounded.substr(0, divider); data_[1] = divider == std::string::npos ? "" : bounded.substr(divider + 1);
+  const std::string next_id = bounded.substr(0, divider);
+  if (next_id != data_[0] && log_mutex_ && xSemaphoreTake(log_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    control_ack_id_.clear(); control_ack_result_.clear();
+    xSemaphoreGive(log_mutex_);
+  }
+  data_[0] = next_id; data_[1] = divider == std::string::npos ? "" : bounded.substr(divider + 1);
   data_at_ = millis();
 }
 
@@ -1115,6 +1125,12 @@ bool ProjectRuntime::Draw(Canvas& c, int x, int y, int w, int h, const Theme& th
   const auto saved = c.GetClip(); c.IntersectClip(x,y,w,h);
   char* argv[] = {reinterpret_cast<char*>(&frame)};
   const int result = esp_elf_request(&elf_, 0, 1, argv); c.RestoreClip(saved);
+  if (id_ == "board-control-api" && abi_ >= 8 && data_[0].size() == 16 && frame.control_action_state &&
+      log_mutex_ && xSemaphoreTake(log_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+    control_ack_id_ = data_[0]; control_ack_ok_ = result == 0 && frame.control_action_state == 1;
+    control_ack_result_ = frame.control_action_result ? std::string(frame.control_action_result).substr(0, 100) : (control_ack_ok_ ? "Action completed" : "Action failed");
+    xSemaphoreGive(log_mutex_);
+  }
   const bool menu_was_open = radio_menu_open_;
   radio_menu_open_ = result == 0 && RadioMenuSupported() && frame.radio_menu_open != 0;
   if (menu_was_open && !radio_menu_open_) radio_menu_closed_at_ms_ = millis();
