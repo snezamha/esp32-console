@@ -8,7 +8,7 @@
     "lint": "eslint",
     "start": "next start",
     "test": "node scripts/test-auth-owner.mjs && node scripts/test-hardening.mjs && node scripts/test-battery-trend.mjs && node scripts/test-led-pattern.mjs && node scripts/test-weather-locations.mjs && node scripts/test-device-relink.mjs && node scripts/test-elf-loader.mjs && node scripts/test-pairing-display.mjs && node scripts/verify-projects.mjs && node scripts/test-projects.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "auth:test": "node scripts/test-auth-owner.mjs",
     "battery:test": "node scripts/test-battery-trend.mjs",
     "db:deploy": "prisma migrate deploy",
