@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
 import { AuthCard } from "@/components/AuthCard";
 import { ProjectBuilderGuide } from "@/components/ProjectBuilderGuide";
-import { Sheet, ToastBanner, accentButton, cardClass, inputClass, secondaryButton, useToast } from "@/components/ui";
+import { ConfirmDialog, Sheet, ToastBanner, accentButton, cardClass, inputClass, secondaryButton, useToast } from "@/components/ui";
 import { api, deviceName, isOtaActive } from "@/lib/device-client";
 import type { PublicDevice } from "@/lib/device-types";
 import { errorMessage } from "@/lib/esp";
@@ -50,6 +50,9 @@ export function ProjectBuilder({ active }: { active: boolean }) {
   const [building, setBuilding] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [confirmNew, setConfirmNew] = useState(false);
+  /** null while unknown; the compiler is only offered when this deployment enables it. */
+  const [builder, setBuilder] = useState<{ enabled: boolean; reason: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useToast();
 
@@ -88,6 +91,13 @@ export function ProjectBuilder({ active }: { active: boolean }) {
 
   useEffect(() => {
     if (!active || !user) return;
+    api<{ enabled: boolean; reason: string }>("/api/project-builder?status=1")
+      .then(setBuilder)
+      .catch(() => setBuilder({ enabled: true, reason: "" }));
+  }, [active, user]);
+
+  useEffect(() => {
+    if (!active || !user) return;
     api<{ devices: PublicDevice[] }>("/api/devices")
       .then(({ devices }) => {
         const supported = devices.filter((entry) => entry.board === BUILDER_BOARD);
@@ -109,7 +119,7 @@ export function ProjectBuilder({ active }: { active: boolean }) {
     } catch { setDraftStatus("error"); setError("This browser could not save the draft. Download the .ino file instead."); }
   };
   const newSketch = () => {
-    if (!window.confirm("Start a new sketch? This will replace the current draft in this browser.")) return;
+    setConfirmNew(false);
     revision.current += 1;
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* The save status will report unavailable storage. */ }
     setDraft(INITIAL);
@@ -157,6 +167,7 @@ export function ProjectBuilder({ active }: { active: boolean }) {
   if (status === "loading" || !loaded) return <p className="py-8 text-center text-sm text-zinc-500">Loading…</p>;
   if (!user) return <AuthCard />;
   const device = devices?.find((entry) => entry.id === deviceId);
+  const canBuild = builder?.enabled !== false;
   const cannotInstall = !binary || !device || installing || !device.projectSupported || device.projectApi < 4 || isOtaActive(device.ota);
 
   return (
@@ -165,6 +176,11 @@ export function ProjectBuilder({ active }: { active: boolean }) {
         <h2 className="text-sm font-semibold">Project Builder</h2>
         <p className="mt-1 text-xs text-zinc-500">Write an Arduino-style sketch, compile a standalone Xtensa ELF, then download it or install it on a board.</p>
       </div>
+      {builder && !builder.enabled && (
+        <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+          {builder.reason} You can still write, save and download the sketch, and compile it with the Arduino toolchain.
+        </p>
+      )}
       {error && <pre role="alert" className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-red-50 p-3 font-mono text-xs leading-5 text-red-700 dark:bg-red-950/50 dark:text-red-300">{error}</pre>}
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
         <section className={cardClass + " min-w-0 overflow-hidden"}>
@@ -193,7 +209,7 @@ export function ProjectBuilder({ active }: { active: boolean }) {
             }}
           />
           <div className="flex flex-wrap items-center gap-2 border-t border-zinc-200 p-4 dark:border-zinc-800">
-            <Button onClick={build} disabled={building} className={accentButton + " h-10 px-4"}>{building ? "Compiling…" : "Compile ELF"}</Button>
+            <Button onClick={build} disabled={building || !canBuild} className={accentButton + " h-10 px-4"}>{building ? "Compiling…" : "Compile ELF"}</Button>
             <Button onClick={saveDraft} className={secondaryButton + " h-10 px-4"}>Save now</Button>
             <span role="status" className={`text-xs ${draftStatus === "error" ? "text-red-600 dark:text-red-400" : "text-zinc-500"}`}>
               {draftStatus === "error" ? "Could not save in this browser. Download the .ino file." : draftStatus === "saving" ? "Saving draft…" : "Saved in this browser"}
@@ -214,7 +230,7 @@ export function ProjectBuilder({ active }: { active: boolean }) {
             </label>
             <Button onClick={() => download(new Blob([draft.source], { type: "text/plain" }), `${draft.id || "project"}.ino`)} className={secondaryButton + " h-10 px-4"}>Download .ino</Button>
             {binary && <Button onClick={() => download(binary, `${draft.id}-${draft.version}.elf`)} className={secondaryButton + " h-10 px-4"}>Download ELF · {binary.size.toLocaleString()} B</Button>}
-            <Button onClick={newSketch} className="ml-auto h-10 px-2 text-sm text-zinc-500 underline">New sketch</Button>
+            <Button onClick={() => setConfirmNew(true)} className="ml-auto h-10 px-2 text-sm text-zinc-500 underline">New sketch</Button>
           </div>
         </section>
 
@@ -245,6 +261,14 @@ export function ProjectBuilder({ active }: { active: boolean }) {
           </section>
         </aside>
       </div>
+      <ConfirmDialog
+        open={confirmNew}
+        onClose={() => setConfirmNew(false)}
+        onConfirm={newSketch}
+        title="Start a new sketch?"
+        confirmLabel="Start new sketch"
+        description="The draft saved in this browser is replaced by the starter sketch. Download the .ino file first if you want to keep it."
+      />
       <Sheet open={guideOpen} onClose={() => setGuideOpen(false)} title="Project Builder coding guide" subtitle="ESP32-S3-LCD-0.85 · ABI 4" wide>
         <ProjectBuilderGuide />
       </Sheet>

@@ -9,12 +9,15 @@ datasource db {
 /// An unlinked board waiting for someone to enter its code. One row per board (by MAC); a
 /// restart replaces the previous pending row for that board.
 model Pairing {
-  mac       String    @id
+  mac       String   @id
   secret    String
   code      String
-  board     String    @default("")
-  firmware  String    @default("")
+  board     String   @default("")
+  firmware  String   @default("")
   expiresAt DateTime
+  /// When this board's code was last replaced. A check-in whose `secret` does not match this row
+  /// is throttled against it, so a forged MAC cannot churn a board's code in a loop.
+  resetAt   DateTime @default(now())
   /// Set once the code is entered; the board picks up the device row on its next sync.
   deviceId  String?
 
@@ -48,18 +51,18 @@ model Device {
   /// Last settings uploaded by the board.
   reported         Json
   /// Settings owned by each independently installed display project.
-  projectSettings  Json    @default("{}")
+  projectSettings  Json          @default("{}")
   /// Console edits not yet confirmed by the board: { [key]: { value, rev } }.
-  pending          Json    @default("{}")
-  settingsReported Boolean @default(false)
-  commands         Json    @default("[]")
-  tests            Json    @default("{}")
+  pending          Json          @default("{}")
+  settingsReported Boolean       @default(false)
+  commands         Json          @default("[]")
+  tests            Json          @default("{}")
   testsUpdatedAt   DateTime?
   /// One entry per minute and at charging transitions, oldest first: { t, battery, batteryMv, charging, rssi, heap }.
-  samples          Json    @default("[]")
+  samples          Json          @default("[]")
   ota              Json?
   /// [primary ssid, backup ssid].
-  networks         Json    @default("[]")
+  networks         Json          @default("[]")
   projectFiles     ProjectFile[]
   files            DeviceFile[]
 
@@ -91,4 +94,14 @@ model ProjectFile {
   createdAt DateTime @default(now())
 
   @@index([deviceId, createdAt])
+}
+
+/// Fixed-window counter shared by every serverless instance (an in-process Map is per-instance,
+/// so it cannot bound anything on a serverless host). One row per limited key.
+model RateLimit {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
+
+  @@index([windowStart])
 }

@@ -10,7 +10,7 @@ import {
   Label,
   Switch,
 } from "@headlessui/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 export const primaryButton =
   "rounded-xl bg-zinc-900 text-sm font-medium text-white transition data-active:scale-[.99] data-disabled:cursor-not-allowed data-disabled:opacity-50 data-hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:data-hover:bg-zinc-200";
@@ -57,7 +57,7 @@ export function Sheet({
             <CloseButton onClick={onClose} />
           </div>
           <div className="-mx-5 min-h-0 flex-1 space-y-5 overflow-y-auto px-5">{children}</div>
-          {footer && <div className="flex justify-end gap-2">{footer}</div>}
+          {footer && <div className="flex flex-wrap items-center justify-end gap-2">{footer}</div>}
         </DialogPanel>
       </div>
     </Dialog>
@@ -154,29 +154,63 @@ export function Group({ title, children }: { title: string; children: ReactNode 
   );
 }
 
+/** Form-level failure. `role="alert"` so a screen reader announces it when it appears. */
 export function ErrorText({ children }: { children: ReactNode }) {
-  return children ? <p className="text-sm text-red-600 dark:text-red-400">{children}</p> : null;
+  return children ? (
+    <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+      {children}
+    </p>
+  ) : null;
 }
 
-/** Transient bottom-of-screen message. Use with <ToastBanner toast={toast} />. */
+/** One shown message. The id makes repeats distinct, so the same text shown twice restarts. */
+export type Toast = { text: string; id: number };
+
+/**
+ * Transient bottom-of-screen message for things that succeeded. Use with
+ * `<ToastBanner toast={toast} />`; a failure the user may need to read or retry belongs in an
+ * `ErrorText` or a banner that stays on screen instead.
+ */
 export function useToast() {
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const show = useCallback((text: string) => setToast({ text, id: nextToastId++ }), []);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(timer);
   }, [toast]);
-  return [toast, setToast] as const;
+  return [toast, show] as const;
 }
 
-export function ToastBanner({ toast }: { toast: string | null }) {
+// Showing the same text twice would otherwise leave the state unchanged, so the effect would not
+// re-run, the first timer would still be counting, and the second toast would vanish early.
+let nextToastId = 0;
+
+export function ToastBanner({ toast }: { toast: Toast | null }) {
   if (!toast) return null;
   return (
     <div
+      key={toast.id}
       role="status"
       className="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 mx-auto max-w-sm rounded-xl bg-zinc-900 px-4 py-3 text-center text-sm text-white shadow-lg dark:bg-white dark:text-zinc-900"
     >
-      {toast}
+      {toast.text}
+    </div>
+  );
+}
+
+/** Failure that stays on screen until the user reads it, with an optional retry. */
+export function ErrorBanner({ message, onRetry, onDismiss }: { message: string; onRetry?: () => void; onDismiss?: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300"
+    >
+      <span className="min-w-0 flex-1 break-words">{message}</span>
+      <span className="flex shrink-0 gap-3">
+        {onRetry && <Button onClick={onRetry} className="font-medium underline">Retry</Button>}
+        {onDismiss && <Button onClick={onDismiss} aria-label="Dismiss error" className="font-medium underline">Dismiss</Button>}
+      </span>
     </div>
   );
 }

@@ -75,6 +75,10 @@ export function AddDeviceDialog({
       onAdded(body.device);
     } catch (err) {
       setError(errorMessage(err));
+      // Clear the rejected code and put the caret back in the first box, so the next attempt is
+      // just typing six digits again rather than six deletions first.
+      setDigits(Array(CODE_LENGTH).fill(""));
+      requestAnimationFrame(() => inputs.current[0]?.focus());
     } finally {
       setBusy(false);
     }
@@ -129,7 +133,7 @@ export function AddDeviceDialog({
                 />
               ))}
             </div>
-            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           </div>
 
           <NoCodeHelp />

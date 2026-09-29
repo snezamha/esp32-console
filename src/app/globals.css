@@ -8,3 +8,16 @@
 html {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Respect the system setting: the console's transitions, pulsing skeletons and press effects are
+   decoration, never the only signal that something happened. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -58,15 +58,17 @@ int main() {
  console.state=ConsoleClient::State::Error;console.error="HTTP 500";
  c=render();assert(c.Has("123 456"));assert(runtime.draws==0);
  console.code.clear();c=render();assert(c.Has("Pairing failed"));assert(c.Has("HTTP 500"));assert(runtime.draws==0);
+ // No code and no error yet: the first poll has not answered whether this board is new or is
+ // relinking after a reset, so a cached project keeps the screen instead of flickering.
  console.error.clear();console.state=ConsoleClient::State::Connecting;
- c=render();assert(c.Has("Getting code..."));assert(runtime.draws==0);
+ c=render();assert(runtime.draws==1);assert(c.texts.empty());
  console.server.clear();console.state=ConsoleClient::State::Off;
  c=render();assert(c.Has("Console not set"));assert(runtime.draws==0);
  console.linked=true;console.state=ConsoleClient::State::Linked;
  c=render();assert(runtime.draws==1);assert(c.texts.empty());
  Network::GetInstance().state=Network::WifiState::Setup;
  c=render();assert(runtime.draws==0);assert(c.Has("Join Wi-Fi"));
- std::cout << "Pairing code survives connection errors; setup messages precede projects; linked projects still draw\\n";
+ std::cout << "Pairing code and console failures survive over projects; the quiet relink window does not\\n";
 }
 `;
 const directory = mkdtempSync(join(tmpdir(), "esp32-pairing-test-"));

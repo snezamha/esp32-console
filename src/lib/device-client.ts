@@ -85,18 +85,27 @@ export function recentSamples(samples: DeviceSample[], hours: number) {
   return samples.filter((s) => s.t > since);
 }
 
-/** Measured change since the last charge-state transition, limited to the last six hours. */
+/**
+ * Measured change since the last charge-state transition, limited to the last six hours.
+ *
+ * `anchor` says what the span is actually measured from, so the label can state it: a transition
+ * older than the window leaves only "the last N minutes" to report, not "since charging started".
+ */
 export function batteryTrend(device: PublicDevice) {
+  const windowStart = Date.now() - 6 * 60 * 60 * 1000;
   const samples = recentSamples(device.samples, 6).filter((s) => s.battery >= 0 && s.charging === device.charging);
   const lastTransition = device.samples.findLastIndex((s) => s.charging !== undefined && s.charging !== device.charging);
-  const start = samples.find((s) => s.t > (device.samples[lastTransition]?.t ?? 0));
+  const transitionAt = lastTransition >= 0 ? device.samples[lastTransition].t : 0;
+  const start = samples.find((s) => s.t > transitionAt);
   if (!device.online || !start || device.battery < 0 || device.lastSeen - start.t < 5 * 60_000) return null;
+  const anchor: "charge-start" | "charge-stop" | "window" =
+    transitionAt > windowStart ? (device.charging ? "charge-start" : "charge-stop") : "window";
   const minutes = Math.round((device.lastSeen - start.t) / 60_000);
   const percent = device.battery - start.battery;
   const millivolts = device.batteryMv > 0 && (start.batteryMv ?? 0) > 0 ? device.batteryMv - start.batteryMv! : null;
   const direction = millivolts !== null && Math.abs(millivolts) >= 20
     ? Math.sign(millivolts) : Math.abs(percent) >= 2 ? Math.sign(percent) : 0;
-  return { minutes, percent, millivolts, direction };
+  return { anchor, minutes, percent, millivolts, direction };
 }
 
 /** Battery below this is flagged in the list. */

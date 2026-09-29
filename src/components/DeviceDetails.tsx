@@ -131,11 +131,24 @@ function StatusPanel({ device }: { device: PublicDevice }) {
       </dl>
       {trend && (
         <div className="rounded-xl bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
-          <span className="font-medium">Change over {trend.minutes} min: </span>
+          <span className="font-medium">
+            {trend.anchor === "charge-start"
+              ? `Since charging started (${trend.minutes} min)`
+              : trend.anchor === "charge-stop"
+                ? `Since charging stopped (${trend.minutes} min)`
+                : `Change over the last ${trend.minutes} min`}
+            :{" "}
+          </span>
           <span className="tabular-nums">{trend.percent > 0 ? "+" : ""}{trend.percent}%{trend.millivolts !== null ? ` · ${trend.millivolts > 0 ? "+" : ""}${trend.millivolts} mV` : ""}</span>
         </div>
       )}
-      <p className="text-xs text-zinc-500">The board reports active charging. When charging stops, the voltage trend shows whether the battery is falling; this board cannot directly detect a connected USB cable.</p>
+      {device.battery >= 0 && (
+        <p className="text-xs text-zinc-500">
+          {device.charging
+            ? "The board reports active charging. Its percentage reads high while current is flowing, because the charger lifts the measured terminal voltage above the battery's resting voltage."
+            : "The board cannot directly detect a connected USB cable. When it is not charging, the voltage trend is what shows whether the battery is falling."}
+        </p>
+      )}
       {device.sdCard?.mounted && (
         <div aria-label="SD card usage" className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
           <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.min(100, ((device.sdCard.total - device.sdCard.free) / Math.max(1, device.sdCard.total)) * 100)}%` }} />
@@ -185,6 +198,15 @@ function Sparkline({
 }) {
   const points = samples.map((s) => ({ t: s.t, v: pick(s), charging: s.charging })).filter((p): p is { t: number; v: number; charging: boolean | undefined } => p.v !== null);
   if (points.length < 2) return null;
+  // The legend must describe what is actually plotted: a window with no charge events, or only a
+  // start, must not advertise a marker the chart does not contain.
+  const events = showChargeEvents
+    ? points.flatMap((point, i) =>
+        i > 0 && point.charging !== undefined && points[i - 1].charging !== undefined && point.charging !== points[i - 1].charging
+          ? [{ t: point.t, index: i, started: point.charging }]
+          : [],
+      )
+    : [];
   const values = points.map((p) => p.v);
   const lo = min ?? Math.min(...values);
   const hi = Math.max(max ?? Math.max(...values), lo + 1);
@@ -217,11 +239,28 @@ function Sparkline({
       </figcaption>
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="mt-2 h-12 w-full text-blue-500" role="img" aria-label={`${label} trend, now ${last}${unit}`}>
         <path d={path} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-        {showChargeEvents && points.map((point, i) => i > 0 && point.charging !== undefined && points[i - 1].charging !== undefined && point.charging !== points[i - 1].charging ? (
-          <circle key={point.t} cx={coordinates[i].x} cy={coordinates[i].y} r="3.5" fill={point.charging ? "#10b981" : "#f59e0b"} />
-        ) : null)}
+        {events.map((event) => (
+          <circle
+            key={event.t}
+            cx={coordinates[event.index].x}
+            cy={coordinates[event.index].y}
+            r="3.5"
+            fill={event.started ? "#10b981" : "#f59e0b"}
+          />
+        ))}
       </svg>
-      {showChargeEvents && <p className="mt-1 text-[10px] text-zinc-500"><span className="text-emerald-500">●</span> Charging started <span className="ml-2 text-amber-500">●</span> Charging stopped</p>}
+      {events.length > 0 && (
+        <p className="mt-1 text-[10px] text-zinc-500">
+          {events.some((event) => event.started) && (
+            <span><span className="text-emerald-500">●</span> Charging started</span>
+          )}
+          {events.some((event) => !event.started) && (
+            <span className={events.some((event) => event.started) ? "ml-2" : ""}>
+              <span className="text-amber-500">●</span> Charging stopped
+            </span>
+          )}
+        </p>
+      )}
     </figure>
   );
 }

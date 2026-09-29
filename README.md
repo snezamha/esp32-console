@@ -22,9 +22,11 @@ Everything is self-contained: the Arduino firmware source lives in `firmware/`, 
 ```bash
 pnpm install
 cp .env.example .env.local   # fill in DATABASE_URL, AUTH_SECRET, AUTH_GOOGLE_ID/SECRET — see Deploying
-pnpm db:push                 # creates the Devices/Pairings tables
+pnpm db:deploy               # applies prisma/migrations (creates the tables on a fresh database)
 pnpm dev
 ```
+
+Checks: `pnpm lint`, `pnpm typecheck`, `pnpm test` (self-contained — no database, network or board). The same three run in CI on every push and pull request (`.github/workflows/ci.yml`).
 
 Open http://localhost:3000 in Chrome or Edge. Web Serial needs a secure context (HTTPS or localhost). The Flash firmware tab works without any of the above; only the Devices tab needs a database and Google sign-in configured.
 
@@ -51,7 +53,7 @@ The board needs the console's address, which must be reachable from the board (n
 
 ## Accounts and data
 
-Sign-in is Google only (`src/auth.ts`, [Auth.js](https://authjs.dev) v5) — there is no username/password. Devices belong to the signed-in Google account (`owner` = the account's stable id) and are stored in Postgres via [Prisma](https://www.prisma.io) (`prisma/schema.prisma`: `Device`, `Pairing`). Board check-ins hold their HTTP request open for up to a few seconds waiting for a database change (see `src/lib/device-store.ts`) rather than relying on an in-process event bus, so this works correctly across Vercel's multiple serverless instances — there is no server-side state outside the database.
+Sign-in is Google only (`src/auth.ts`, [Auth.js](https://authjs.dev) v5) — there is no username/password. **Set `AUTH_ALLOWED_EMAILS`** to the addresses (`me@gmail.com`) and/or domains (`@mycompany.com`) allowed to use the console; without it any Google account can sign in and add its own boards. It is enforced both at sign-in and on every request, so removing an address ends its existing sessions too, and Project Builder stays disabled entirely until the list is set, because it compiles submitted C on the server. Devices belong to the signed-in Google account (`owner` = the account's stable id) and are stored in Postgres via [Prisma](https://www.prisma.io) (`prisma/schema.prisma`: `Device`, `Pairing`). Board check-ins hold their HTTP request open for up to a few seconds waiting for a database change (see `src/lib/device-store.ts`) rather than relying on an in-process event bus, so this works correctly across Vercel's multiple serverless instances — there is no server-side state outside the database.
 
 HTTPS servers are verified against the certificate bundle built into the ESP32 core; a self-signed server needs `console insecure on` on the board (or the toggle in **Menu → Console**), which skips that check.
 
@@ -61,9 +63,16 @@ HTTPS servers are verified against the certificate bundle built into the ESP32 c
 2. **Google sign-in.** In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an OAuth client (type: Web application) with an authorized redirect URI of `https://<your-domain>/api/auth/callback/google`. Put the client id/secret into `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`.
 3. **Session secret.** Generate one with `openssl rand -hex 32` and put it in `AUTH_SECRET`.
 4. **Push to GitHub**, then import the repo in Vercel (New Project → pick the repo). It auto-detects Next.js; no build settings need changing.
-5. Add the three variables above under Project Settings → Environment Variables (Production and Preview), then deploy.
-6. **Create the tables once**, from your machine, pointed at the same database: `DATABASE_URL="<the pooled string>" pnpm db:push`.
-7. Point boards at the deployed URL: `CONSOLE_URL=https://<your-domain> pnpm firmware:build`, or set it later over USB/serial (see **Devices** above).
+5. **Who may sign in.** Put your address in `AUTH_ALLOWED_EMAILS` (see **Accounts and data**). A deployment without it is open to every Google account.
+6. Add those variables under Project Settings → Environment Variables (Production and Preview), then deploy.
+7. **Schema.** `pnpm build` runs `prisma migrate deploy`, so a fresh database gets its tables on the first deploy and later schema changes apply on their own. A database created earlier with `pnpm db:push` already has the `0_init` tables, so mark that migration as applied once before the first deploy:
+
+   ```bash
+   DATABASE_URL="<the pooled string>" pnpm exec prisma migrate resolve --applied 0_init
+   ```
+
+   Change the schema with `pnpm db:migrate` (writes a new folder under `prisma/migrations/`), and commit it. `pnpm db:push` stays available for throwaway local databases.
+8. Point boards at the deployed URL: `CONSOLE_URL=https://<your-domain> pnpm firmware:build`, or set it later over USB/serial (see **Devices** above).
 
 `prisma generate` runs automatically after `pnpm install` (the `postinstall` script), which Vercel's build also triggers — no extra build step needed. Each API route declares `export const maxDuration = 10` to fit Vercel's default (Hobby-plan) function limit; on a plan with a longer limit, raising that value (and the matching `MAX_WAIT_S`/`WAIT_MS` constants next to it) shortens the delay before a board or the panel notices a change.
 

@@ -2,6 +2,7 @@ import { controlDevice, controlRequestStatus, updateControlDevice, type ControlA
 import { LED_COUNT, sanitizeSettings, type DeviceSettings } from "@/lib/device-settings";
 import { parsePixels } from "@/lib/led-pattern";
 import { randomBytes } from "node:crypto";
+import { withinLimit } from "@/lib/rate-limit";
 import { db } from "@/lib/db";
 
 const fields = new Set<keyof DeviceSettings>([
@@ -12,6 +13,11 @@ const boolFields = new Set(["led_on", "led_feedback", "button_sound", "rotate", 
 const stringFields = new Set(["theme", "led_mode", "led_pixels", "tz"]);
 const hexColor = /^#[0-9a-fA-F]{6}$/;
 export const maxDuration = 10;
+/** Per device, over a minute. Generous for a script driving one board, but it keeps a leaked or
+ * brute-forced key from being used to hammer the board or fill its request queue. */
+const MAX_READS_PER_MINUTE = 120;
+const MAX_WRITES_PER_MINUTE = 30;
+const RATE_WINDOW_MS = 60 * 1000;
 
 function secret(request: Request) {
   return request.headers.get("authorization")?.match(/^Bearer ([0-9a-f]{64})$/i)?.[1] ?? "";
@@ -30,6 +36,9 @@ export function OPTIONS() {
 
 export async function GET(request: Request, ctx: RouteContext<"/api/board-control/[id]">) {
   const { id } = await ctx.params;
+  if (!(await withinLimit(`control:read:${id}`, MAX_READS_PER_MINUTE, RATE_WINDOW_MS))) {
+    return noStore({ error: "Too many requests for this board. Slow down and retry." }, 429);
+  }
   const requestId = new URL(request.url).searchParams.get("requestId");
   if (requestId) {
     if (!/^[0-9a-f]{16}$/.test(requestId)) return noStore({ error: "Invalid request ID." }, 400);
@@ -51,6 +60,9 @@ export async function GET(request: Request, ctx: RouteContext<"/api/board-contro
 
 export async function POST(request: Request, ctx: RouteContext<"/api/board-control/[id]">) {
   const { id } = await ctx.params;
+  if (!(await withinLimit(`control:write:${id}`, MAX_WRITES_PER_MINUTE, RATE_WINDOW_MS))) {
+    return noStore({ error: "Too many requests for this board. Slow down and retry." }, 429);
+  }
   const key = secret(request);
   const device = await controlDevice(id, key);
   if (!device) return noStore({ error: "Invalid API key or project inactive." }, 401);

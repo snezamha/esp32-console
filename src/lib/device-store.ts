@@ -21,6 +21,8 @@ import type {
 
 /** Pairing code lifetime; the board asks for a new one when it expires. */
 export const CODE_TTL_MS = 10 * 60 * 1000;
+/** Smallest gap between two code replacements for the same MAC (see `upsertPairing`). */
+export const PAIRING_RESET_COOLDOWN_MS = 60 * 1000;
 /** A device counts as online when it synced within this window (a poll can be held up to 25 s). */
 export const ONLINE_WINDOW_MS = 60 * 1000;
 const COMMAND_TTL_MS = 10 * 60 * 1000;
@@ -109,7 +111,7 @@ function toPublic(row: DeviceRow): PublicDevice {
     projectSafeMode: (row.reported as Record<string, unknown>)._project_safe === 1,
     sdCard: ((row.reported as Record<string, unknown>)._sd as SdCardStatus | undefined) ?? null,
     settingsReported: row.settingsReported,
-    commands: commands.slice(-10).map((entry) => { const command = { ...entry }; delete command.fileId; return command; }),
+    commands: commands.slice(-10).map((entry) => { const command = { ...entry, arg: publicArg(entry) }; delete command.fileId; return command; }),
     tests: row.tests as Record<string, TestResult>,
     testsUpdatedAt: row.testsUpdatedAt?.getTime() ?? 0,
     samples: row.samples as DeviceSample[],
@@ -119,6 +121,19 @@ function toPublic(row: DeviceRow): PublicDevice {
     pairingAvailable: false,
     syncing: Object.keys(pending).length > 0,
   };
+}
+
+/**
+ * A command's argument as the console may show it. A queued `wifi_add` still carries the network
+ * password (the board needs it once, at delivery), and the activity list is sent to the browser as
+ * JSON, so the password is removed here and again from the stored row in `pickDelivery`.
+ */
+function publicArg(command: DeviceCommand) {
+  if (command.type !== "wifi_add") return command.arg;
+  const values = new URLSearchParams(command.arg);
+  if (!values.has("password")) return command.arg;
+  values.set("password", "");
+  return values.toString();
 }
 
 /** Settings as the console sees them: what the board reported plus edits still on their way. */
@@ -194,7 +209,9 @@ export type BoardReport = {
 export type SyncResult =
   | { status: "pending"; code: string; expiresIn: number }
   | { status: "linked"; token: string; name: string; rev: number; settings: Partial<DeviceSettings>; commands: DeviceCommand[] }
-  | { status: "unlinked" };
+  | { status: "unlinked" }
+  /** A code replacement for this MAC arrived too soon after the last one. */
+  | { status: "throttled" };
 
 /** Applies telemetry/settings/test/ack fields from a report onto a device row. */
 function applyReport(row: DeviceRow, report: BoardReport, now: Date): Prisma.DeviceUpdateInput {
@@ -334,6 +351,8 @@ function pickDelivery(row: DeviceRow): Delivery {
   const updated = source.map((c) => {
     if (c.status !== "queued") return c;
     toDeliver.push(c);
+    // `toDeliver` keeps the full argument for this one response; the row keeps the redacted one.
+    c = { ...c, arg: publicArg(c) };
     return { ...c, status: ACKED_COMMANDS.includes(c.type) ? ("sent" as const) : ("done" as const), updatedAt: Date.now(), transfer: c.transfer ? { ...c.transfer, phase: "sent" as const, logs: [...c.transfer.logs, { seq: -Date.now(), at: Date.now(), level: "info" as const, message: "Board accepted the installation request." }] } : undefined };
   });
 
@@ -370,9 +389,13 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
       const deadline = Date.now() + waitMs;
       while (Date.now() < deadline && !signal.aborted) {
         await sleep(Math.min(POLL_INTERVAL_MS, deadline - Date.now()), signal);
+        // Only the version is read while waiting; the full row (samples, transfer logs, settings)
+        // is fetched once something actually changed.
+        const changed = await db.device.findUnique({ where: { id: deviceId }, select: { version: true } });
+        if (!changed) return { status: "unlinked" };
+        if (changed.version === row.version) continue;
         const fresh = await db.device.findUnique({ where: { id: deviceId } });
         if (!fresh) return { status: "unlinked" };
-        if (fresh.version === row.version) continue;
         row = fresh;
         delivery = pickDelivery(row);
         if (controlState(row).requests?.find(controlPending)?.id !== controlRequestId) break;
@@ -417,6 +440,7 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
   if (!/^[0-9a-f]{16,64}$/.test(report.secret)) return { status: "unlinked" };
 
   let pairing = await upsertPairing(report);
+  if (!pairing) return { status: "throttled" };
   if (waitMs > 0 && report.code === pairing.code) {
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline && !signal.aborted && (!pairing.deviceId || pairing.deviceId === "claiming")) {
@@ -443,12 +467,24 @@ export async function syncBoard(report: BoardReport, waitMs: number, signal: Abo
   };
 }
 
-/** Creates or refreshes the pending pairing row for this board (one row per MAC address). */
-async function upsertPairing(report: BoardReport): Promise<PairingRow> {
+/**
+ * Creates or refreshes the pending pairing row for this board (one row per MAC address).
+ *
+ * Returns null when a replacement is throttled. `/api/device/sync` is unauthenticated and the MAC
+ * comes from the request body, so anyone who knows a board's MAC could otherwise replace its
+ * pairing row in a loop: the board's code would be invalidated before anyone could type it, and
+ * each forged call would hand the caller a fresh code for a board they do not own. A board only
+ * needs a new secret when it reboots, so one replacement per minute costs a real board nothing.
+ */
+async function upsertPairing(report: BoardReport): Promise<PairingRow | null> {
   const existing = await db.pairing.findUnique({ where: { mac: report.mac } });
   const now = Date.now();
   if (existing && existing.secret === report.secret && (existing.deviceId || existing.expiresAt.getTime() > now)) {
     return existing;
+  }
+  // Never hand the current code to a caller that failed to prove it is the board holding it.
+  if (existing && existing.secret !== report.secret && now - existing.resetAt.getTime() < PAIRING_RESET_COOLDOWN_MS) {
+    return null;
   }
 
   let code: string;
@@ -457,8 +493,8 @@ async function upsertPairing(report: BoardReport): Promise<PairingRow> {
 
   return db.pairing.upsert({
     where: { mac: report.mac },
-    create: { mac: report.mac, secret: report.secret, code, board: report.board, firmware: report.firmware, expiresAt: new Date(now + CODE_TTL_MS) },
-    update: { secret: report.secret, code, board: report.board, firmware: report.firmware, expiresAt: new Date(now + CODE_TTL_MS), deviceId: null },
+    create: { mac: report.mac, secret: report.secret, code, board: report.board, firmware: report.firmware, expiresAt: new Date(now + CODE_TTL_MS), resetAt: new Date(now) },
+    update: { secret: report.secret, code, board: report.board, firmware: report.firmware, expiresAt: new Date(now + CODE_TTL_MS), resetAt: new Date(now), deviceId: null },
   });
 }
 

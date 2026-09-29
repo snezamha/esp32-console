@@ -21,6 +21,11 @@ export function ConfigureDialog({
 }) {
   const [name, setName] = useState(device.name);
   const [settings, setSettings] = useState<DeviceSettings>(device.settings);
+  // Frozen at mount. `device` keeps updating from the live device stream while this dialog is
+  // open, so comparing against it would move the baseline under the person's edits: a change the
+  // board reported by itself would read as an unsaved edit here.
+  const [baseline] = useState(() => ({ settings: device.settings, name: device.name }));
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState(false);
@@ -59,7 +64,10 @@ export function ConfigureDialog({
   const set = <K extends keyof DeviceSettings>(key: K, value: DeviceSettings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }));
 
-  const changed = JSON.stringify(settings) !== JSON.stringify(device.settings);
+  const changed = JSON.stringify(settings) !== JSON.stringify(baseline.settings);
+  const dirty = changed || name !== baseline.name;
+  /** Escape, the backdrop and Cancel all land here, so edits are never dropped silently. */
+  const requestClose = () => (dirty ? setConfirmDiscard(true) : onClose());
 
   const save = async () => {
     setBusy(true);
@@ -79,18 +87,21 @@ export function ConfigureDialog({
   return (
     <Sheet
       open
-      onClose={onClose}
+      onClose={requestClose}
       title={`Configure ${deviceName(device)}`}
       subtitle={device.online ? "Changes reach the device within a second." : "Device is offline. Changes apply when it reconnects."}
       footer={
         <>
-          <ErrorText>{error}</ErrorText>
-          <Button onClick={onClose} className={secondaryButton + " h-10 px-4"}>
+          {/* Full width on a phone, so a long message never squeezes the buttons. */}
+          <div className="mr-auto min-w-0 basis-full sm:basis-auto">
+            <ErrorText>{error}</ErrorText>
+          </div>
+          <Button onClick={requestClose} className={secondaryButton + " h-10 px-4"}>
             Cancel
           </Button>
           <Button
             onClick={save}
-            disabled={busy || !device.settingsReported || (!changed && name === device.name)}
+            disabled={busy || !device.settingsReported || !dirty}
             className={accentButton + " h-10 min-w-20 px-4"}
           >
             {busy ? "Saving…" : "Save"}
@@ -215,6 +226,14 @@ export function ConfigureDialog({
         title="Format the SD card?"
         description="Every file on the card is erased, including images and videos of installed display projects; those projects show “Insert SD card” until reinstalled. This cannot be undone."
         confirmLabel="Erase and format"
+      />
+      <ConfirmDialog
+        open={confirmDiscard}
+        onClose={() => setConfirmDiscard(false)}
+        onConfirm={() => { setConfirmDiscard(false); onClose(); }}
+        title="Discard changes?"
+        confirmLabel="Discard"
+        description={`Your edits to ${deviceName(device)} have not been saved and will be lost.`}
       />
       <ToastBanner toast={toast} />
     </Sheet>

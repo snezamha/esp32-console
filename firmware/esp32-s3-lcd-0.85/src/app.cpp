@@ -459,10 +459,14 @@ void App::DrawHome(Canvas& c, int x, int y, int w, int h, const Theme& theme) {
   auto& network = Network::GetInstance();
   const int cx = x + w / 2;
   auto& console = ConsoleClient::GetInstance();
-  // A saved project must not obscure Wi-Fi setup or a shown pairing code. The brief window
-  // right after connecting, before the first poll answers whether this board is new or just
-  // relinking (lost its token on reset), stays quiet and lets a cached project keep showing.
-  const bool pairing = network.State() == Network::WifiState::Setup || !console.Code().empty();
+  // A saved project must not obscure Wi-Fi setup, a shown pairing code, or a console that cannot
+  // be reached at all: those screens are the only way to tell the board is waiting for someone.
+  // The brief window right after connecting, before the first poll answers whether this board is
+  // new or just relinking (lost its token on reset), stays quiet and lets a cached project show.
+  const bool consoleBlocked =
+      !console.HasLink() && (console.Server().empty() || !console.LastError().empty());
+  const bool pairing =
+      network.State() == Network::WifiState::Setup || !console.Code().empty() || consoleBlocked;
   if (!pairing && ProjectRuntime::Get().Draw(c, x, y, w, h, theme)) return;
   const int line = Canvas::LineHeight() + 2;
   std::vector<std::pair<std::string, uint16_t>> lines;

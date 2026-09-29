@@ -7,7 +7,7 @@ import { AddDeviceDialog } from "@/components/AddDeviceDialog";
 import { AuthCard } from "@/components/AuthCard";
 import { ConfigureDialog } from "@/components/ConfigureDialog";
 import { DeviceDetails, type DetailsTab } from "@/components/DeviceDetails";
-import { ConfirmDialog, ErrorText, Sheet, Skeleton, ToastBanner, cardClass, inputClass, primaryButton, secondaryButton, useToast } from "@/components/ui";
+import { ConfirmDialog, ErrorBanner, ErrorText, Sheet, Skeleton, ToastBanner, cardClass, inputClass, primaryButton, secondaryButton, useToast } from "@/components/ui";
 import {
   LOW_BATTERY,
   api,
@@ -38,6 +38,9 @@ export function Devices({ active }: { active: boolean }) {
   const [relinkId, setRelinkId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [query, setQuery] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Wrapped in a function so `setRetry` stores the callback instead of calling it.
+  const [retry, setRetry] = useState<(() => void) | null>(null);
   const [toast, setToast] = useToast();
 
   // Live list while the tab is visible: each request holds briefly and returns the current list,
@@ -98,22 +101,34 @@ export function Devices({ active }: { active: boolean }) {
   const relinkDevice = devices?.find((device) => device.id === relinkId);
 
   const command = async (device: PublicDevice, body: Record<string, string>, done: string) => {
+    setActionError(null);
     try {
       await sendCommand(device, body);
       setToast(device.online ? done : `${done} when the device comes online`);
     } catch (err) {
-      setToast(errorMessage(err));
+      // Kept on screen with a retry: a toast would take the reason away after a few seconds.
+      setActionError(`${deviceName(device)}: ${errorMessage(err)}`);
+      setRetry(() => () => void command(device, body, done));
+    }
+  };
+
+  const removeDevice = async (device: PublicDevice) => {
+    setActionError(null);
+    try {
+      await api(`/api/devices/${device.id}`, "DELETE");
+    } catch (err) {
+      setActionError(`${deviceName(device)}: ${errorMessage(err)}`);
+      setRetry(() => () => void removeDevice(device));
     }
   };
 
   const confirm = async () => {
     if (dialog?.kind !== "confirm" || !current) return;
+    const device = current;
+    const action = dialog.action;
     setDialog(null);
-    if (dialog.action === "remove") {
-      await api(`/api/devices/${current.id}`, "DELETE").catch((err) => setToast(errorMessage(err)));
-    } else {
-      await command(current, { type: dialog.action }, dialog.action === "restart" ? "Restarting" : "Powering off");
-    }
+    if (action === "remove") await removeDevice(device);
+    else await command(device, { type: action }, action === "restart" ? "Restarting" : "Powering off");
   };
 
   return (
@@ -127,6 +142,9 @@ export function Devices({ active }: { active: boolean }) {
               : `${devices.length} linked · ${devices.filter((d) => d.online).length} online`}
             {connection === "retrying" && " · reconnecting…"}
           </p>
+          <span role="status" aria-live="polite" className="sr-only">
+            {connection === "retrying" ? "Connection lost. Reconnecting." : connection === "live" ? "Live" : ""}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Menu>
@@ -157,6 +175,14 @@ export function Devices({ active }: { active: boolean }) {
               .catch((err) => setLoadError(errorMessage(err)));
           }} className="font-medium underline">Retry</Button>
         </div>
+      )}
+
+      {actionError && (
+        <ErrorBanner
+          message={actionError}
+          onRetry={retry ? () => { const again = retry; setActionError(null); setRetry(null); again(); } : undefined}
+          onDismiss={() => { setActionError(null); setRetry(null); }}
+        />
       )}
 
       {devices === null && !loadError && (

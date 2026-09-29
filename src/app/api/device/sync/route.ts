@@ -130,6 +130,9 @@ export async function POST(request: Request) {
   const waitS = Math.min(report.projectStatus && !["done", "failed", "cancelled"].includes(report.projectStatus.phase) ? 0 : report.settings?.project === "weather" ? 4 : MAX_WAIT_S, Math.max(0, int("wait", 0)));
   const result = await syncBoard(report, waitS * 1000, request.signal);
   if (request.signal.aborted) return reply([], 499);
+  // A code replacement for this MAC came too soon after the last one. The board retries on its
+  // next poll; a forged MAC never receives a code it did not already hold.
+  if (result.status === "throttled") return reply(["status=error", "error=pairing throttled"], 429);
   const lines = render(result);
   if (result.status === "linked" && report.settings) {
     const settings = { ...report.settings, ...result.settings };
@@ -182,6 +185,8 @@ function sdCard(value: string) {
 
 function render(result: SyncResult) {
   switch (result.status) {
+    case "throttled":
+      return ["status=error", "error=pairing throttled"];
     case "pending":
       return ["status=pending", `code=${result.code}`, `expires=${result.expiresIn}`];
     case "unlinked":
