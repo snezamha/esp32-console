@@ -14,6 +14,7 @@ const extract = (text, marker) => {
 };
 const allocation = extract(readFileSync(join(root, "esp_elf_adapter.c"), "utf8"), "void *esp_elf_malloc(");
 const program = `
+#include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
