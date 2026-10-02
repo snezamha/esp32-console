@@ -48,7 +48,18 @@ bool BoxAudioCodec::Start() {
   chan_cfg.dma_desc_num = 8;
   chan_cfg.dma_frame_num = 480;
   chan_cfg.auto_clear_after_cb = true;
-  if (i2s_new_channel(&chan_cfg, &tx_, &rx_) != ESP_OK) return false;
+  if (i2s_new_channel(&chan_cfg, &tx_, &rx_) != ESP_OK) {
+    tx_ = rx_ = nullptr;
+    return false;
+  }
+  // A failed init (usually no DMA memory) must hand the port back, or every later Start() hits
+  // "no available channel" and audio stays dead until reboot.
+  auto release = [this]() {
+    if (tx_) i2s_del_channel(tx_);
+    if (rx_) i2s_del_channel(rx_);
+    tx_ = rx_ = nullptr;
+    return false;
+  };
 
   i2s_std_config_t std_cfg = {
       .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(static_cast<uint32_t>(sample_rate_)),
@@ -64,12 +75,15 @@ bool BoxAudioCodec::Start() {
           },
   };
   std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
-  if (i2s_channel_init_std_mode(tx_, &std_cfg) != ESP_OK) return false;
+  if (i2s_channel_init_std_mode(tx_, &std_cfg) != ESP_OK) return release();
   std_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
   std_cfg.gpio_cfg.din = din_;
-  if (i2s_channel_init_std_mode(rx_, &std_cfg) != ESP_OK) return false;
-  i2s_channel_enable(tx_);
-  i2s_channel_enable(rx_);
+  if (i2s_channel_init_std_mode(rx_, &std_cfg) != ESP_OK) return release();
+  if (i2s_channel_enable(tx_) != ESP_OK || i2s_channel_enable(rx_) != ESP_OK) {
+    i2s_channel_disable(tx_);
+    i2s_channel_disable(rx_);
+    return release();
+  }
 
   if (es8311_found_) {
     es8311_ = new Es8311(i2c_bus_, es8311_addr_);

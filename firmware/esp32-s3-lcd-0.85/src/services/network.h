@@ -98,6 +98,9 @@ class Network {
   int network_index_ = 0;
   bool from_page_ = false;
   uint32_t connected_at_ = 0;
+  // Failed automatic attempts in a row, and whether the saved network has worked since boot.
+  int failed_attempts_ = 0;
+  bool ever_connected_ = false;
   std::string error_;
   int attempt_id_ = 0;
 

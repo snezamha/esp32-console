@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 #include <algorithm>
@@ -20,13 +21,24 @@ extern const uint8_t kCertBundleStart[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t kCertBundleEnd[] asm("_binary_x509_crt_bundle_end");
 
 namespace {
-// Network jitter buffer. At 4096 (the old size) this held only ~0.25s of audio at 128kbps, so
-// any Wi-Fi/TCP hiccup (retransmit, beacon-interval stall, a slow moment on the origin server)
-// that outlasted that quarter-second starved the decoder directly — audible as a stutter, and
-// independent of which core does the decoding. 16384 gives ~1s of cushion at 128kbps (less at
-// higher bitrates, still several times the old margin) while staying a small, one-time heap
-// allocation for the duration of playback.
-constexpr size_t kInputSize = 16384;
+// Network jitter buffer: a PSRAM ring, ~16 s at 128 kbps. Some servers (radiojar) go silent for
+// up to ~4 s and then catch up faster than real time; the prebuilt lwIP's fixed 5.7 KB receive
+// window also caps throughput at window/RTT, so slow round trips dip below the bitrate. Whatever
+// arrives ahead of playback stays queued here, so those gaps are never heard.
+constexpr size_t kRingSize = 256 * 1024;
+// The decoder reads from a small linear window refilled from the ring, so each frame only shifts
+// a few KB instead of the whole queue.
+constexpr size_t kInputSize = 8192;
+// Playback starts with ~4 s queued. Icecast servers send a 64 KB burst on connect, so this is
+// usually instant; the lead built here is all the cushion a real-time server ever gives, and with
+// 2 s a single slow patch emptied it within seconds. A server that does not burst gets half after
+// kBufferWaitMs rather than a long silence. After the queue runs dry once, the station has shown
+// it stalls, so the next refill aims for ~6 s.
+constexpr size_t kStartBuffer = 64 * 1024;
+constexpr size_t kRebuffer = 96 * 1024;
+constexpr uint32_t kBufferWaitMs = 3000;
+constexpr size_t kMinFrameBuffer = 2048;
+constexpr uint32_t kMaxBadFrames = 32768;
 constexpr int kMaxOutputSamples = 2304;
 constexpr uint32_t kNoDataTimeoutMs = 12000;
 
@@ -162,6 +174,7 @@ void RadioStream::Task(void* arg) {
       // Give the stack and decoder buffers back before a firmware download starts.
       std::lock_guard<std::mutex> lock(self->mutex_);
       if (self->url_.empty()) {
+        WiFi.setSleep(true);
         self->task_running_ = false;
         break;
       }
@@ -192,6 +205,39 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
     SetStatus(generation, 4, "Audio busy");
     return;
   }
+  // Modem sleep makes the station wait for a beacon before each burst; with the small TCP
+  // window that alone can push throughput under the stream bitrate. Only touched once connected:
+  // esp_wifi_set_ps() runs on every call, and this retries every 2 s while Wi-Fi is still joining.
+  if (WiFi.getSleep()) WiFi.setSleep(false);
+  // Audio first: the I2S DMA buffers, MP3 decoder and stream buffer need contiguous internal
+  // blocks, and a TLS session leaves only a few KB of fragments behind. Started after GET, the
+  // codec failed to allocate DMA and every station ended as "Stream unavailable".
+  auto* codec = Board::GetInstance().GetAudioCodec();
+  if (!codec->started()) codec->Start();
+  LogStage("codec_start", codec->started() && codec->es8311_found());
+  if (generation != generation_) return;
+  if (!codec->started() || !codec->es8311_found()) {
+    SetStatus(generation, 4, "Speaker unavailable");
+    return;
+  }
+  HMP3Decoder decoder = MP3InitDecoder();
+  LogStage("decoder_init", decoder != nullptr);
+  if (!decoder) {
+    SetStatus(generation, 4, "Decoder unavailable");
+    return;
+  }
+  // The ring is only touched by memcpy, so PSRAM is fast enough and keeps internal RAM for TLS.
+  std::unique_ptr<uint8_t, decltype(&free)> ring(
+      static_cast<uint8_t*>(heap_caps_malloc(kRingSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)), &free);
+  std::unique_ptr<uint8_t[]> input(new (std::nothrow) uint8_t[kInputSize]);
+  std::unique_ptr<int16_t[]> output(new (std::nothrow) int16_t[kMaxOutputSamples]);
+  std::unique_ptr<int16_t[]> stereo(new (std::nothrow) int16_t[kMaxOutputSamples]);
+  if (!ring || !input || !output || !stereo) {
+    SetStatus(generation, 4, "No memory");
+    MP3FreeDecoder(decoder);
+    return;
+  }
+  LogStage("buffers_ready");
   // ~HTTPClient() calls _client->stop() through a raw pointer, so the clients must outlive it.
   NetworkClient plain;
   NetworkClientSecure secure;
@@ -208,66 +254,71 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
   http.setTimeout(1500);
   if (!http.begin(client, url.c_str())) {
     SetStatus(generation, 4, "Invalid stream");
+    MP3FreeDecoder(decoder);
     return;
   }
   LogStage("http_begin");
   const int code = http.GET();
   LogStage("http_get", code);
-  if (generation != generation_) {
-    http.end();
-    return;
-  }
-  if (code != 200) {
-    SetStatus(generation, 4, code < 0 ? "Connection failed" : "Station unavailable");
-    http.end();
-    return;
-  }
-  SetStatus(generation, 2, "Buffering");
-  auto* codec = Board::GetInstance().GetAudioCodec();
-  if (!codec->started()) codec->Start();
-  LogStage("codec_start", codec->es8311_found());
-  if (generation != generation_) {
-    http.end();
-    return;
-  }
-  if (!codec->es8311_found()) {
-    SetStatus(generation, 4, "Speaker unavailable");
-    http.end();
-    return;
-  }
-  HMP3Decoder decoder = MP3InitDecoder();
-  LogStage("decoder_init", decoder != nullptr);
-  if (!decoder) {
-    SetStatus(generation, 4, "Decoder unavailable");
-    http.end();
-    return;
-  }
-  std::unique_ptr<uint8_t[]> input(new (std::nothrow) uint8_t[kInputSize]);
-  std::unique_ptr<int16_t[]> output(new (std::nothrow) int16_t[kMaxOutputSamples]);
-  std::unique_ptr<int16_t[]> stereo(new (std::nothrow) int16_t[kMaxOutputSamples]);
-  if (!input || !output || !stereo) {
-    SetStatus(generation, 4, "No memory");
+  if (generation != generation_ || code != 200) {
+    if (generation == generation_)
+      SetStatus(generation, 4, code < 0 ? "Connection failed" : "Station unavailable");
     MP3FreeDecoder(decoder);
     http.end();
     return;
   }
-  LogStage("buffers_ready");
+  SetStatus(generation, 2, "Buffering");
   auto* stream = http.getStreamPtr();
-  size_t buffered = 0;
+  size_t buffered = 0;          // Bytes in the decoder window.
+  size_t ring_head = 0, ring_fill = 0;
+  size_t resume_at = kStartBuffer;
+  uint32_t buffering_since = millis();
   uint32_t last_data = millis();
   bool played = false;
+  bool failed = false;
+  bool buffering = true;
   uint32_t frames_decoded = 0;
-  while (generation == generation_ && http.connected() && !HwTest::GetInstance().IsBusy()) {
-    const size_t available = stream->available();
-    if (available && buffered < kInputSize) {
-      const size_t read = stream->readBytes(input.get() + buffered, std::min<size_t>(available, kInputSize - buffered));
-      buffered += read;
-      if (read) last_data = millis();
+  uint32_t underruns = 0;
+  uint32_t bad_frames = 0;
+  // Keep playing what is queued after the server hangs up; only then reconnect.
+  while (generation == generation_ && !HwTest::GetInstance().IsBusy() &&
+         (http.connected() || ring_fill + buffered >= kMinFrameBuffer)) {
+    // Drain everything the socket holds, not just one chunk: over TLS, available() only exposes
+    // the current record, and some servers (radiojar) send one MP3 frame per record. Reading one
+    // record per decoded frame pinned intake to exactly the playback rate, so the buffer could
+    // never refill and every network hiccup became an audible dropout.
+    size_t available = stream->available();
+    for (int chunk = 0; available && ring_fill < kRingSize && chunk < 64; ++chunk) {
+      const size_t tail = (ring_head + ring_fill) % kRingSize;
+      const size_t span = std::min({available, kRingSize - ring_fill, kRingSize - tail});
+      const size_t read = stream->readBytes(ring.get() + tail, span);
+      if (!read) break;
+      ring_fill += read;
+      last_data = millis();
+      available = stream->available();
     }
-    if (buffered < 2048 && millis() - last_data < kNoDataTimeoutMs) {
+    while (ring_fill && buffered < kInputSize) {
+      const size_t span = std::min({ring_fill, kInputSize - buffered, kRingSize - ring_head});
+      memcpy(input.get() + buffered, ring.get() + ring_head, span);
+      buffered += span;
+      ring_head = (ring_head + span) % kRingSize;
+      ring_fill -= span;
+    }
+    if (!buffering && buffered < kMinFrameBuffer) {
+      buffering = true;
+      resume_at = kRebuffer;
+      buffering_since = millis();
+      LogStage("underrun", ++underruns);
+      SetStatus(generation, 2, "Buffering");
+    }
+    const size_t queued = ring_fill + buffered;
+    const bool ready = queued >= resume_at ||
+                       (queued >= resume_at / 2 && millis() - buffering_since >= kBufferWaitMs);
+    if (buffering && !ready && http.connected() && millis() - last_data < kNoDataTimeoutMs) {
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
+    buffering = false;
     if (!buffered || millis() - last_data >= kNoDataTimeoutMs) break;
     const int offset = MP3FindSyncWord(input.get(), buffered);
     if (offset < 0) {
@@ -278,7 +329,7 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
       memmove(input.get(), input.get() + offset, buffered - offset);
       buffered -= offset;
     }
-    if (buffered < 2048 && available) continue;
+    if (buffered < kMinFrameBuffer && available) continue;
     unsigned char* cursor = input.get();
     int remaining = buffered;
     const int error = MP3Decode(decoder, &cursor, &remaining, output.get(), 0);
@@ -288,11 +339,29 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
-    const size_t consumed = error ? 1 : buffered - static_cast<size_t>(remaining);
+    // MAINDATA_UNDERFLOW is a parsed frame whose bit-reservoir data starts in a frame we never
+    // got (normal right after connecting): Helix has already stored it and moved the cursor, so
+    // skip the whole frame. Dropping just one byte there rescanned the frame body, hit false sync
+    // words that reset the reservoir, and on reservoir-heavy streams (WDR Event) no frame ever
+    // decoded. Only an unparseable header means "not a frame here": then step one byte.
+    const size_t consumed = error && error != ERR_MP3_MAINDATA_UNDERFLOW
+                                ? 1 : buffered - static_cast<size_t>(remaining);
     if (consumed > buffered) break;
     buffered -= consumed;
     memmove(input.get(), input.get() + consumed, buffered);
-    if (error) continue;
+    if (error) {
+      // Each failed attempt memmoves the whole buffer. This task outranks the display task on
+      // core 1, so a stream of garbage must yield regularly and eventually give up, or the UI
+      // freezes.
+      if (++bad_frames % 32 == 0) vTaskDelay(1);
+      if (bad_frames >= kMaxBadFrames) {
+        SetStatus(generation, 4, "Unsupported stream");
+        failed = true;
+        break;
+      }
+      continue;
+    }
+    bad_frames = 0;
     MP3FrameInfo info{};
     MP3GetLastFrameInfo(decoder, &info);
     if (generation != generation_) break;
@@ -301,6 +370,7 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
     UpdateSpectrum(output.get(), info.outputSamps / info.nChans, info.nChans, info.samprate, generation);
     if (codec->sample_rate() != info.samprate && !codec->SetSampleRate(info.samprate)) {
       SetStatus(generation, 4, "Audio clock failed");
+      failed = true;
       break;
     }
     const int frames = info.outputSamps / info.nChans;
@@ -330,5 +400,7 @@ void RadioStream::Run(const std::string& url, uint32_t generation) {
   MP3FreeDecoder(decoder);
   http.end();
   LogStage("stream_end", played);
-  if (generation == generation_) SetStatus(generation, 4, played ? "Reconnecting" : "Stream unavailable");
+  // Keep a specific error (e.g. "Audio clock failed") instead of the generic one.
+  if (generation == generation_ && !failed)
+    SetStatus(generation, 4, played ? "Reconnecting" : "Stream unavailable");
 }

@@ -1,6 +1,8 @@
 #include "app.h"
 
+#include <esp_heap_caps.h>
 #include <esp_system.h>
+#include <mbedtls/platform.h>
 #include <sys/time.h>
 
 #include <algorithm>
@@ -27,6 +29,14 @@
 #include "ui/icons.h"
 
 namespace {
+// The prebuilt core keeps mbedTLS in internal RAM (~40 KB per session). The console long-poll and
+// a radio stream each hold one, which left too little for the second handshake and the I2S DMA.
+// PSRAM is plenty fast for TLS records; fall back to internal RAM if PSRAM is missing or full.
+void* TlsCalloc(size_t count, size_t size) {
+  return heap_caps_calloc_prefer(count, size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+void TlsFree(void* ptr) { heap_caps_free(ptr); }
 
 constexpr uint8_t kButtonPower = 1 << 0;
 constexpr uint8_t kButtonUp = 1 << 1;
@@ -157,6 +167,7 @@ void App::Start() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
 
+  mbedtls_platform_set_calloc_free(TlsCalloc, TlsFree);
   HeapGuard::Begin();
   HeapGuard::Phase("boot:start");
   DeviceConfig::Get().Load();

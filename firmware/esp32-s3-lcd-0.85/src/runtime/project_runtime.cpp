@@ -366,6 +366,9 @@ int BleScanResult(int index, char* address, uint32_t address_capacity, char* nam
 
 struct HttpJob { uint32_t generation; std::string url; };
 void HttpTask(void* raw) {
+  // Scoped: vTaskDelete(nullptr) below ends the task without running destructors, so the job, the
+  // payload and the TLS session would otherwise leak on every request.
+  {
   std::unique_ptr<HttpJob> job(static_cast<HttpJob*>(raw));
   int status = -1; std::string payload;
   // ~HTTPClient() calls _client->stop() through a raw pointer, so the clients must outlive it.
@@ -392,6 +395,7 @@ void HttpTask(void* raw) {
     if (job->generation == g_io_generation.load()) {
       g_http_payload = std::move(payload); g_http_code = status; g_http_state = status > 0 ? 2 : -1;
     }
+  }
   }
   vTaskDelete(nullptr);
 }

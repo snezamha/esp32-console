@@ -14,13 +14,17 @@
 
 namespace {
 
+// Last station disconnect reason (wifi_err_reason_t), set from the Wi-Fi event task.
+std::atomic<int> g_disconnect_reason{0};
+
 // Wi-Fi interfaces going up and down under open TCP connections is the prime suspect for the
 // lwIP "pbuf_free: p->ref > 0" panic, so every mode change is on the record.
 void LogNet(const char* event) {
   HeapGuard::Phase(event);
-  Serial.printf("{\"net\":\"%s\",\"mode\":%d,\"status\":%d,\"ap_clients\":%d,\"up\":%lu}\n",
+  Serial.printf("{\"net\":\"%s\",\"mode\":%d,\"status\":%d,\"reason\":%d,\"ap_clients\":%d,\"up\":%lu}\n",
                 event, static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
-                static_cast<int>(WiFi.softAPgetStationNum()), (unsigned long)(millis() / 1000));
+                g_disconnect_reason.load(), static_cast<int>(WiFi.softAPgetStationNum()),
+                (unsigned long)(millis() / 1000));
 }
 
 // One attempt at a network before moving on (backup network, then the setup access point).
@@ -28,7 +32,11 @@ constexpr uint32_t kConnectTimeoutMs = 20000;
 // Keep the setup access point this long after joining, so the page can show the result.
 constexpr uint32_t kApLingerMs = 90000;
 // While the setup access point is up and nobody uses it, retry the saved network this often.
-constexpr uint32_t kSetupRetryMs = 120000;
+// At 120 s, one failed join at boot (a router briefly answering AUTH_EXPIRE) cost two minutes
+// offline.
+constexpr uint32_t kSetupRetryMs = 30000;
+// Automatic joins at boot before falling back to the setup access point.
+constexpr int kBootAttempts = 3;
 // Give an attempt this long before trusting a "wrong password" report (the first handshake after
 // a channel change sometimes times out on its own).
 constexpr uint32_t kAuthFailGraceMs = 4000;
@@ -39,8 +47,6 @@ constexpr uint32_t kAuthFailGraceMs = 4000;
 constexpr const char* kNtpServer1 = "162.159.200.123";  // time.cloudflare.com
 constexpr const char* kNtpServer2 = "216.239.35.0";     // time.google.com
 
-// Last station disconnect reason (wifi_err_reason_t), set from the Wi-Fi event task.
-std::atomic<int> g_disconnect_reason{0};
 
 bool IsAuthFailure(int reason) {
   return reason == WIFI_REASON_AUTH_FAIL || reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
@@ -128,6 +134,16 @@ void Network::AttemptFailed(uint32_t now_ms) {
     TryNetwork(1, false, now_ms);
     return;
   }
+  // A network that already worked this boot is only briefly gone (router restart, roaming, a
+  // dropped association): keep rejoining instead of parking on the setup access point, whose
+  // AP+STA mode also halves airtime once the link is back. At boot, give a flaky first join a
+  // few tries before assuming the network is wrong.
+  if (!from_page_ && !config.wifi_ssid.empty() &&
+      (ever_connected_ || ++failed_attempts_ < kBootAttempts)) {
+    TryNetwork(0, false, now_ms);
+    return;
+  }
+  failed_attempts_ = 0;
   OpenSetup(now_ms);
 }
 
@@ -180,6 +196,8 @@ void Network::Loop(uint32_t now_ms) {
     case Phase::Connecting: {
       if (WiFi.status() == WL_CONNECTED) {
         LogNet("connected");
+        failed_attempts_ = 0;
+        ever_connected_ = true;
         phase_ = Phase::Connected;
         connected_at_ = now_ms;
         error_.clear();

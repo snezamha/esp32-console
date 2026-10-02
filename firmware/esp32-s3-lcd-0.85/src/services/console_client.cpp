@@ -388,14 +388,16 @@ void ConsoleClient::StartPoll(uint32_t now_ms) {
 
 void ConsoleClient::RequestTask(void* arg) {
   auto slot = static_cast<Slot*>(arg);
-  int code = -1;
-  std::string body;
 
   // Scoped so HTTPClient/WiFiClientSecure/WiFiClient are destroyed (freeing the TLS session's
   // buffers) before this function returns. vTaskDelete(nullptr) below ends the task without
   // unwinding the stack — anything still in scope at that point would never be destructed and
   // its memory never reclaimed, leaking a full TLS session (tens of KB) on every single request.
+  // The response string too: held outside this block it leaked ~300 bytes of internal heap per
+  // poll, which after about an hour left too little for TLS (esp-aes allocation failures).
   {
+    int code = -1;
+    std::string body;
     // Declared before the HTTPClient on purpose: ~HTTPClient() calls _client->stop() through a
     // raw pointer to one of these, so the HTTPClient must be destroyed first. The reverse order
     // closes an already-recycled socket descriptor and corrupts the lwIP TCP queues.
@@ -422,10 +424,10 @@ void ConsoleClient::RequestTask(void* arg) {
     } else {
       code = -100;  // Distinct from a POST failure, which returns its own HTTPC_ERROR_*.
     }
+    slot->code = code;
+    slot->response = std::move(body);
   }
 
-  slot->code = code;
-  slot->response = body;
   slot->done = true;
   vTaskDelete(nullptr);
 }
@@ -688,7 +690,7 @@ void ConsoleClient::OtaTask(void* arg) {
     http.end();
   }
 
-  self->ota_error_ = error;
+  self->ota_error_ = std::move(error);  // Leaves nothing for the skipped destructor to free.
   self->ota_ok_ = ok;
   self->ota_finished_ = true;
   vTaskDelete(nullptr);
